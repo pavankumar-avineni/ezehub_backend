@@ -11,8 +11,12 @@ const start = async () => {
     app.listen(config.port, () => {
       logger.info(`EzeHub API running on port ${config.port}`);
       logger.info(`Environment: ${config.env}`);
-      logger.info(`API Docs: http://localhost:${config.port}/api/docs`);
-    });
+      const baseUrl =
+  config.env === 'production'
+    ? 'https://ezehub-backend.onrender.com'
+    : `http://localhost:${config.port}`;
+
+logger.info(`API Docs: ${baseUrl}/api/docs`);    });
   } catch (error) {
     logger.error(error, 'Failed to start server');
     process.exit(1);
