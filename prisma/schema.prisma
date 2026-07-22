@@ -434,12 +434,14 @@ model RefreshToken {
   token          String    @unique
   platformUserId String?   @map("platform_user_id")
   tenantUserId   String?   @map("tenant_user_id")
+  residentId     String?   @map("resident_id")
   expiresAt      DateTime  @map("expires_at")
   createdAt      DateTime  @default(now()) @map("created_at")
   revokedAt      DateTime? @map("revoked_at")
 
   platformUser PlatformUser? @relation(fields: [platformUserId], references: [id])
   tenantUser   TenantUser?   @relation(fields: [tenantUserId], references: [id])
+  resident     Resident?     @relation(fields: [residentId], references: [id])
 
   @@index([token])
   @@map("refresh_tokens")
@@ -592,6 +594,9 @@ model Resident {
   phone            String
   alternatePhone   String?        @map("alternate_phone")
   profilePhoto     String?        @map("profile_photo")
+  passwordHash     String?        @map("password_hash")
+  loginOtp         String?        @map("login_otp")
+  otpExpiresAt     DateTime?      @map("otp_expires_at")
   dateOfBirth      DateTime?      @map("date_of_birth")
   gender           Gender?
   bloodGroup       BloodGroup?    @map("blood_group")
@@ -625,6 +630,7 @@ model Resident {
   complaints      Complaint[]
   transferHistory TransferHistory[]
   documents       Document[]
+  refreshTokens   RefreshToken[]
 
   @@index([tenantId])
   @@index([bedId])

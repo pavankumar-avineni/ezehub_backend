@@ -27,6 +27,25 @@ export const authenticate = async (req, _res, next) => {
         role: user.role,
         permissions: user.role.permissions.map((rp) => rp.permission.slug),
       };
+    } else if (decoded.scope === 'RESIDENT') {
+      const resident = await prisma.resident.findFirst({
+        where: { id: decoded.userId, status: 'ACTIVE', deletedAt: null },
+        include: { tenant: true, bed: { include: { room: { include: { floor: { include: { building: true } } } } } } },
+      });
+      if (!resident) throw new UnauthorizedError('Resident not found or inactive');
+      req.user = {
+        userId: resident.id,
+        id: resident.id,
+        phone: resident.phone,
+        email: resident.email,
+        firstName: resident.firstName,
+        lastName: resident.lastName,
+        scope: 'RESIDENT',
+        tenantId: resident.tenantId,
+        tenant: resident.tenant,
+        bed: resident.bed,
+        permissions: [],
+      };
     } else {
       const user = await prisma.tenantUser.findFirst({
         where: { id: decoded.userId, isActive: true, deletedAt: null },

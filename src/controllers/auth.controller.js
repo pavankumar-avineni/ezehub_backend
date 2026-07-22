@@ -39,3 +39,33 @@ export const changePassword = async (req, res, next) => {
 export const getProfile = async (req, res) => {
   successResponse(res, req.user, 'Profile retrieved');
 };
+
+// ─── RESIDENT AUTH ───────────────────────────────────────────
+
+export const residentSendOtp = async (req, res, next) => {
+  try {
+    const result = await authService.residentSendOtp(req.body.phone);
+    successResponse(res, result, 'OTP sent');
+  } catch (error) { next(error); }
+};
+
+export const residentVerifyOtp = async (req, res, next) => {
+  try {
+    const result = await authService.residentVerifyOtp(req.body.phone, req.body.otp);
+    successResponse(res, result, 'Login successful');
+  } catch (error) { next(error); }
+};
+
+export const residentLoginPassword = async (req, res, next) => {
+  try {
+    const result = await authService.residentLoginWithPassword(req.body.phone, req.body.password);
+    successResponse(res, result, 'Login successful');
+  } catch (error) { next(error); }
+};
+
+export const residentSetPassword = async (req, res, next) => {
+  try {
+    await authService.residentSetPassword(req.user.userId, req.body.password);
+    successResponse(res, null, 'Password set successfully');
+  } catch (error) { next(error); }
+};
