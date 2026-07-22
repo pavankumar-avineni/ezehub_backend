@@ -55,8 +55,8 @@ export const authenticate = async (req, _res, next) => {
         },
       });
       if (!user) throw new UnauthorizedError('User not found or inactive');
-      if (user.tenant.status === 'SUSPENDED') {
-        throw new UnauthorizedError('Tenant account is suspended');
+      if (user.tenant.status === 'SUSPENDED' || user.tenant.status === 'DISMISSED') {
+        throw new UnauthorizedError('Tenant account is suspended or terminated');
       }
       req.user = {
         id: user.id,
@@ -68,6 +68,7 @@ export const authenticate = async (req, _res, next) => {
         tenant: user.tenant,
         role: user.role,
         permissions: user.role.permissions.map((rp) => rp.permission.slug),
+        isOnHold: user.tenant.status === 'ON_HOLD',
       };
     }
 

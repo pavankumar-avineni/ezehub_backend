@@ -36,7 +36,10 @@ class AuthService {
     }
 
     if (user.tenant.status === 'SUSPENDED') {
-      throw new UnauthorizedError('Your organization account is suspended');
+      throw new UnauthorizedError('Your organization account is suspended. Contact support.');
+    }
+    if (user.tenant.status === 'DISMISSED') {
+      throw new UnauthorizedError('Your organization account has been terminated.');
     }
 
     await prisma.tenantUser.update({

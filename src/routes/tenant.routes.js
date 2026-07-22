@@ -13,11 +13,19 @@ import {
   assignComplaintSchema, updateComplaintStatusSchema, verifyVisitorOtpSchema,
   attendanceSchema, leaveRequestSchema, generateRentSchema, idParamSchema, paginationSchema,
 } from '../validators/index.js';
+
+// Middleware to block write ops for ON_HOLD tenants
+const requireActiveSubscription = (req, res, next) => {
+  if (req.user?.isOnHold && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
+    return res.status(403).json({ success: false, message: 'Your subscription is on hold. Please renew to continue.' });
+  }
+  next();
+};
 import * as ctrl from '../controllers/tenant-modules.controller.js';
 
 const router = Router();
 
-router.use(authenticate, requireTenant, tenantIsolation);
+router.use(authenticate, requireTenant, tenantIsolation, requireActiveSubscription);
 
 // Dashboard & Reports
 router.get('/dashboard', ctrl.getTenantDashboard);

@@ -3,6 +3,7 @@ import authRoutes from './auth.routes.js';
 import platformRoutes from './platform.routes.js';
 import tenantRoutes from './tenant.routes.js';
 import residentRoutes from './resident.routes.js';
+import subscriptionRoutes from './subscription.routes.js';
 
 const router = Router();
 
@@ -14,5 +15,6 @@ router.use('/auth', authRoutes);
 router.use('/platform/tenants', platformRoutes);
 router.use('/tenant', tenantRoutes);
 router.use('/resident', residentRoutes);
+router.use('/subscription', subscriptionRoutes);
 
 export default router;

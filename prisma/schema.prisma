@@ -19,7 +19,9 @@ enum UserScope {
 enum TenantStatus {
   PENDING
   ACTIVE
+  ON_HOLD
   SUSPENDED
+  DISMISSED
   CANCELLED
 }
 
@@ -332,6 +334,7 @@ model Tenant {
   devices         Device[]
   maintenanceRequests MaintenanceRequest[]
   agreements      Agreement[]
+  billingInvoices BillingInvoice[]
 
   @@index([status])
   @@index([slug])
@@ -363,19 +366,32 @@ model Subscription {
 }
 
 model BillingInvoice {
-  id             String        @id @default(uuid())
-  subscriptionId String        @map("subscription_id")
-  invoiceNumber  String        @unique @map("invoice_number")
-  amount         Decimal       @db.Decimal(12, 2)
-  tax            Decimal       @default(0) @db.Decimal(12, 2)
-  total          Decimal       @db.Decimal(12, 2)
-  status         PaymentStatus @default(PENDING)
-  dueDate        DateTime      @map("due_date")
-  paidAt         DateTime?     @map("paid_at")
-  createdAt      DateTime      @default(now()) @map("created_at")
+  id              String        @id @default(uuid())
+  subscriptionId  String        @map("subscription_id")
+  tenantId        String        @map("tenant_id")
+  invoiceNumber   String        @unique @map("invoice_number")
+  plan            String
+  amount          Decimal       @db.Decimal(12, 2)
+  tax             Decimal       @default(0) @db.Decimal(12, 2)
+  total           Decimal       @db.Decimal(12, 2)
+  status          PaymentStatus @default(PENDING)
+  billingStart    DateTime      @map("billing_start")
+  billingEnd      DateTime      @map("billing_end")
+  dueDate         DateTime      @map("due_date")
+  paidAt          DateTime?     @map("paid_at")
+  paymentMethod   String?       @map("payment_method")
+  transactionId   String?       @map("transaction_id")
+  paymentProofUrl String?       @map("payment_proof_url")
+  notes           String?
+  createdBy       String?       @map("created_by")
+  confirmedBy     String?       @map("confirmed_by")
+  createdAt       DateTime      @default(now()) @map("created_at")
 
   subscription Subscription @relation(fields: [subscriptionId], references: [id])
+  tenant       Tenant       @relation(fields: [tenantId], references: [id])
 
+  @@index([tenantId])
+  @@index([status])
   @@map("billing_invoices")
 }
 
