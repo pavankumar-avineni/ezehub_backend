@@ -95,6 +95,13 @@ router.put('/rent/charges/:id', authorize(PERMISSIONS.RENT_MANAGE), validate(idP
 router.get('/rent/outstanding', authorize(PERMISSIONS.RENT_MANAGE), ctrl.getOutstandingBalance);
 router.get('/payments', authorize(PERMISSIONS.PAYMENTS_MANAGE), validate(paginationSchema), ctrl.getPayments);
 router.post('/payments', authorize(PERMISSIONS.PAYMENTS_MANAGE), validate(createPaymentSchema), ctrl.recordPayment);
+router.get('/payments/pending-proofs', authorize(PERMISSIONS.PAYMENTS_MANAGE), ctrl.getPendingPaymentProofs);
+router.post('/payments/:paymentId/confirm', authorize(PERMISSIONS.PAYMENTS_MANAGE), ctrl.confirmResidentPayment);
+router.post('/payments/:paymentId/reject', authorize(PERMISSIONS.PAYMENTS_MANAGE), ctrl.rejectResidentPayment);
+
+// Payment Settings (UPI, QR, Bank details for residents)
+router.get('/settings/payment', ctrl.getPaymentSettings);
+router.put('/settings/payment', ctrl.updatePaymentSettings);
 
 // Complaints
 router.get('/complaints', authorize(PERMISSIONS.COMPLAINTS_READ), validate(paginationSchema), ctrl.getComplaints);

@@ -1,7 +1,9 @@
 import { Router } from 'express';
 import { authenticate } from '../middleware/auth.js';
+import { uploadSingle } from '../middleware/upload.js';
+import { uploadToCloudinary } from '../config/cloudinary.js';
 import prisma from '../config/database.js';
-import { successResponse, paginatedResponse } from '../utils/response.js';
+import { successResponse, paginatedResponse, generateReceiptNumber } from '../utils/response.js';
 
 const router = Router();
 
@@ -31,7 +33,7 @@ router.get('/me', async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
-// GET /resident/rent - Get own rent charges
+// GET /resident/rent - Get own rent charges with payment status
 router.get('/rent', async (req, res, next) => {
   try {
     const charges = await prisma.rentCharge.findMany({
@@ -41,6 +43,108 @@ router.get('/rent', async (req, res, next) => {
       include: { payments: true },
     });
     successResponse(res, charges);
+  } catch (error) { next(error); }
+});
+
+// GET /resident/rent/payment-config - Get tenant's payment QR and UPI for this resident
+router.get('/rent/payment-config', async (req, res, next) => {
+  try {
+    const tenant = await prisma.tenant.findFirst({
+      where: { id: req.user.tenantId },
+      select: { settings: true, name: true },
+    });
+    if (!tenant) return res.status(404).json({ success: false, message: 'Tenant not found' });
+
+    const settings = typeof tenant.settings === 'string' ? JSON.parse(tenant.settings) : (tenant.settings || {});
+    successResponse(res, {
+      tenantName: tenant.name,
+      qrUrl: settings.paymentQrUrl || '',
+      upiId: settings.paymentUpiId || '',
+      bankName: settings.paymentBankName || '',
+      accountNumber: settings.paymentAccountNumber || '',
+      ifscCode: settings.paymentIfscCode || '',
+      accountHolder: settings.paymentAccountHolder || '',
+      instructions: settings.paymentInstructions || 'Pay using any UPI app (GPay, PhonePe, Paytm) and submit proof below.',
+    });
+  } catch (error) { next(error); }
+});
+
+// POST /resident/rent/:chargeId/pay - Submit payment proof for a rent charge
+router.post('/rent/:chargeId/pay', uploadSingle('proof'), async (req, res, next) => {
+  try {
+    const { chargeId } = req.params;
+    const { transactionId, paymentMethod, amount, notes } = req.body;
+
+    if (!transactionId) {
+      return res.status(400).json({ success: false, message: 'Transaction ID is required' });
+    }
+
+    // Verify charge belongs to this resident
+    const charge = await prisma.rentCharge.findFirst({
+      where: { id: chargeId, residentId: req.user.userId },
+    });
+    if (!charge) return res.status(404).json({ success: false, message: 'Rent charge not found' });
+    if (charge.status === 'PAID') return res.status(400).json({ success: false, message: 'This charge is already fully paid' });
+
+    // Upload proof image if provided
+    let paymentProofUrl = null;
+    if (req.file) {
+      const result = await uploadToCloudinary(req.file.buffer, { folder: `ezehub/${req.user.tenantId}/rent-proofs` });
+      paymentProofUrl = result.secure_url;
+    }
+
+    const paymentAmount = amount ? parseFloat(amount) : Number(charge.totalAmount) - Number(charge.paidAmount);
+
+    // Create payment record with PENDING status (awaiting tenant confirmation)
+    const payment = await prisma.payment.create({
+      data: {
+        tenantId: req.user.tenantId,
+        residentId: req.user.userId,
+        rentChargeId: chargeId,
+        amount: paymentAmount,
+        method: paymentMethod || 'UPI',
+        status: 'PENDING',
+        transactionId,
+        receiptNumber: generateReceiptNumber(),
+        notes: notes || null,
+        paymentProofUrl,
+      },
+    });
+
+    // Notify tenant about the payment proof submission
+    const tenantUser = await prisma.tenantUser.findFirst({
+      where: { tenantId: req.user.tenantId, isActive: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (tenantUser) {
+      const resident = await prisma.resident.findFirst({ where: { id: req.user.userId } });
+      await prisma.notification.create({
+        data: {
+          tenantId: req.user.tenantId,
+          userId: tenantUser.id,
+          userType: 'TENANT',
+          title: 'Rent Payment Proof Submitted',
+          message: `${resident?.firstName} ${resident?.lastName} submitted payment proof of ₹${paymentAmount} for ${charge.month}/${charge.year}. Transaction ID: ${transactionId}`,
+          channel: 'IN_APP',
+          status: 'PENDING',
+        },
+      });
+    }
+
+    successResponse(res, payment, 'Payment proof submitted. Awaiting confirmation.', 201);
+  } catch (error) { next(error); }
+});
+
+// GET /resident/rent/payments - Get own payment history
+router.get('/rent/payments', async (req, res, next) => {
+  try {
+    const payments = await prisma.payment.findMany({
+      where: { residentId: req.user.userId },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+      include: { rentCharge: { select: { month: true, year: true, totalAmount: true } } },
+    });
+    successResponse(res, payments);
   } catch (error) { next(error); }
 });
 

@@ -8,7 +8,8 @@ import { complaintService, visitorService } from '../services/complaint.service.
 import { financeService, maintenanceService } from '../services/finance.service.js';
 import { documentService, notificationService, reportService } from '../services/document.service.js';
 import tenantService from '../services/tenant.service.js';
-import { successResponse, paginatedResponse } from '../utils/response.js';
+import prisma from '../config/database.js';
+import { successResponse, paginatedResponse, generateReceiptNumber } from '../utils/response.js';
 
 const wrap = (fn) => async (req, res, next) => {
   try { await fn(req, res, next); } catch (error) { next(error); }
@@ -261,6 +262,149 @@ export const getPayments = wrap(async (req, res) => {
 export const getOutstandingBalance = wrap(async (req, res) => {
   const balance = await rentService.getOutstandingBalance(req.tenantId);
   successResponse(res, balance);
+});
+
+// Payment Proof Management (Resident → Tenant flow)
+export const getPendingPaymentProofs = wrap(async (req, res) => {
+  const payments = await prisma.payment.findMany({
+    where: { tenantId: req.tenantId, status: 'PENDING' },
+    orderBy: { createdAt: 'desc' },
+    include: {
+      resident: { select: { id: true, firstName: true, lastName: true, phone: true } },
+      rentCharge: { select: { id: true, month: true, year: true, totalAmount: true, paidAmount: true } },
+    },
+  });
+  successResponse(res, payments);
+});
+
+export const confirmResidentPayment = wrap(async (req, res) => {
+  const { paymentId } = req.params;
+
+  const payment = await prisma.payment.findFirst({
+    where: { id: paymentId, tenantId: req.tenantId, status: 'PENDING' },
+  });
+  if (!payment) {
+    return res.status(404).json({ success: false, message: 'Pending payment not found' });
+  }
+
+  // Confirm payment and update rent charge in a transaction
+  const result = await prisma.$transaction(async (tx) => {
+    const confirmedPayment = await tx.payment.update({
+      where: { id: paymentId },
+      data: { status: 'PAID', confirmedBy: req.user.id, confirmedAt: new Date() },
+    });
+
+    // Update rent charge paid amount
+    if (payment.rentChargeId) {
+      const charge = await tx.rentCharge.findUnique({ where: { id: payment.rentChargeId } });
+      if (charge) {
+        const newPaidAmount = Number(charge.paidAmount) + Number(payment.amount);
+        const status = newPaidAmount >= Number(charge.totalAmount) ? 'PAID' : 'PARTIAL';
+        await tx.rentCharge.update({
+          where: { id: payment.rentChargeId },
+          data: { paidAmount: newPaidAmount, status },
+        });
+      }
+    }
+
+    // Notify resident
+    await tx.notification.create({
+      data: {
+        tenantId: req.tenantId,
+        userId: payment.residentId,
+        userType: 'RESIDENT',
+        title: 'Payment Confirmed',
+        message: `Your payment of ₹${payment.amount} has been confirmed. Receipt: ${confirmedPayment.receiptNumber}`,
+        channel: 'IN_APP',
+        status: 'PENDING',
+      },
+    });
+
+    return confirmedPayment;
+  });
+
+  successResponse(res, result, 'Payment confirmed');
+});
+
+export const rejectResidentPayment = wrap(async (req, res) => {
+  const { paymentId } = req.params;
+  const { reason } = req.body;
+
+  const payment = await prisma.payment.findFirst({
+    where: { id: paymentId, tenantId: req.tenantId, status: 'PENDING' },
+  });
+  if (!payment) {
+    return res.status(404).json({ success: false, message: 'Pending payment not found' });
+  }
+
+  const rejectedPayment = await prisma.$transaction(async (tx) => {
+    const updated = await tx.payment.update({
+      where: { id: paymentId },
+      data: { status: 'CANCELLED', rejectedReason: reason || 'Payment rejected by admin', confirmedBy: req.user.id, confirmedAt: new Date() },
+    });
+
+    // Notify resident
+    await tx.notification.create({
+      data: {
+        tenantId: req.tenantId,
+        userId: payment.residentId,
+        userType: 'RESIDENT',
+        title: 'Payment Rejected',
+        message: `Your payment of ₹${payment.amount} was rejected. Reason: ${reason || 'Invalid proof'}. Please resubmit.`,
+        channel: 'IN_APP',
+        status: 'PENDING',
+      },
+    });
+
+    return updated;
+  });
+
+  successResponse(res, rejectedPayment, 'Payment rejected, resident notified');
+});
+
+// Payment Settings
+export const getPaymentSettings = wrap(async (req, res) => {
+  const tenant = await prisma.tenant.findFirst({
+    where: { id: req.tenantId },
+    select: { settings: true },
+  });
+  const settings = typeof tenant.settings === 'string' ? JSON.parse(tenant.settings) : (tenant.settings || {});
+  successResponse(res, {
+    paymentQrUrl: settings.paymentQrUrl || '',
+    paymentUpiId: settings.paymentUpiId || '',
+    paymentBankName: settings.paymentBankName || '',
+    paymentAccountNumber: settings.paymentAccountNumber || '',
+    paymentIfscCode: settings.paymentIfscCode || '',
+    paymentAccountHolder: settings.paymentAccountHolder || '',
+    paymentInstructions: settings.paymentInstructions || '',
+  });
+});
+
+export const updatePaymentSettings = wrap(async (req, res) => {
+  const tenant = await prisma.tenant.findFirst({
+    where: { id: req.tenantId },
+    select: { settings: true },
+  });
+  const currentSettings = typeof tenant.settings === 'string' ? JSON.parse(tenant.settings) : (tenant.settings || {});
+  const { paymentQrUrl, paymentUpiId, paymentBankName, paymentAccountNumber, paymentIfscCode, paymentAccountHolder, paymentInstructions } = req.body;
+
+  const updatedSettings = {
+    ...currentSettings,
+    ...(paymentQrUrl !== undefined && { paymentQrUrl }),
+    ...(paymentUpiId !== undefined && { paymentUpiId }),
+    ...(paymentBankName !== undefined && { paymentBankName }),
+    ...(paymentAccountNumber !== undefined && { paymentAccountNumber }),
+    ...(paymentIfscCode !== undefined && { paymentIfscCode }),
+    ...(paymentAccountHolder !== undefined && { paymentAccountHolder }),
+    ...(paymentInstructions !== undefined && { paymentInstructions }),
+  };
+
+  await prisma.tenant.update({
+    where: { id: req.tenantId },
+    data: { settings: updatedSettings },
+  });
+
+  successResponse(res, updatedSettings, 'Payment settings updated');
 });
 
 // Complaints

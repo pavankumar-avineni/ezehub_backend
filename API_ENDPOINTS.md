@@ -204,7 +204,10 @@
 | PUT | `/tenant/rent/charges/:id` | rent:manage | Update rent charge |
 | GET | `/tenant/rent/outstanding` | rent:manage | Outstanding balance |
 | GET | `/tenant/payments` | payments:manage | List payments |
-| POST | `/tenant/payments` | payments:manage | Record payment |
+| POST | `/tenant/payments` | payments:manage | Record payment (manual) |
+| GET | `/tenant/payments/pending-proofs` | payments:manage | Pending payment proofs from residents |
+| POST | `/tenant/payments/:paymentId/confirm` | payments:manage | Confirm resident payment proof |
+| POST | `/tenant/payments/:paymentId/reject` | payments:manage | Reject resident payment proof |
 
 ### POST /tenant/rent/generate
 ```json
@@ -219,6 +222,33 @@
   "amount": 8000,
   "method": "UPI",
   "transactionId": "TXN123456"
+}
+```
+
+### POST /tenant/payments/:paymentId/reject
+```json
+{ "reason": "Invalid transaction ID, amount mismatch" }
+```
+
+---
+
+## Tenant — Payment Settings
+
+| Method | Endpoint | Permission | Description |
+|--------|----------|------------|-------------|
+| GET | `/tenant/settings/payment` | Any tenant user | Get payment settings (UPI, QR, bank) |
+| PUT | `/tenant/settings/payment` | Any tenant user | Update payment settings |
+
+### PUT /tenant/settings/payment
+```json
+{
+  "paymentUpiId": "sunrise@upi",
+  "paymentQrUrl": "https://res.cloudinary.com/.../qr.png",
+  "paymentBankName": "HDFC Bank",
+  "paymentAccountNumber": "1234567890",
+  "paymentIfscCode": "HDFC0001234",
+  "paymentAccountHolder": "Sunrise PG Pvt Ltd",
+  "paymentInstructions": "Pay using any UPI app and submit proof in the app."
 }
 ```
 
@@ -297,6 +327,131 @@ Fields: file, residentId, entityType, entityId, name
 | POST | `/tenant/notifications` | notifications:manage | Create notification |
 | PUT | `/tenant/notifications/:id/read` | Any tenant user | Mark as read |
 | PUT | `/tenant/notifications/read-all` | Any tenant user | Mark all as read |
+
+---
+
+## Subscription & Billing (Platform ↔ Tenant)
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| GET | `/subscription/plans` | No | Get all available plans (public) |
+| GET | `/subscription/payment-config` | No | Get platform payment QR/UPI config |
+| GET | `/subscription/admin/analytics` | Platform | Subscription analytics |
+| GET | `/subscription/admin/invoices/:tenantId` | Platform | Get invoices for a tenant |
+| POST | `/subscription/admin/invoices/:tenantId` | Platform | Generate invoice for tenant |
+| POST | `/subscription/admin/invoices/:invoiceId/confirm` | Platform | Confirm tenant payment |
+| POST | `/subscription/admin/invoices/:invoiceId/reject` | Platform | Reject tenant payment |
+| POST | `/subscription/admin/:tenantId/hold` | Platform | Put tenant on hold |
+| POST | `/subscription/admin/:tenantId/dismiss` | Platform | Permanently dismiss tenant |
+| GET | `/subscription/my` | Tenant | Get my subscription info |
+| POST | `/subscription/my/pay/:invoiceId` | Tenant | Submit payment proof (multipart) |
+| GET | `/subscription/my/invoices` | Tenant | Get my invoices |
+
+### POST /subscription/my/pay/:invoiceId
+```
+Content-Type: multipart/form-data
+Fields: transactionId (required), paymentMethod, proof (image), notes
+```
+
+### POST /subscription/admin/invoices/:invoiceId/reject
+```json
+{ "reason": "Invalid transaction, amount does not match" }
+```
+
+---
+
+## Resident — Authentication
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| POST | `/auth/resident/send-otp` | No | Send OTP to resident phone |
+| POST | `/auth/resident/verify-otp` | No | Verify OTP and get tokens |
+| POST | `/auth/resident/login` | No | Login with phone + password |
+| POST | `/auth/resident/set-password` | Yes | Set password (after first OTP login) |
+
+### POST /auth/resident/send-otp
+```json
+{ "phone": "9876543210" }
+```
+
+### POST /auth/resident/verify-otp
+```json
+{ "phone": "9876543210", "otp": "123456" }
+```
+
+---
+
+## Resident — Profile & Data
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| GET | `/resident/me` | Resident | Get own profile with room/bed/building details |
+| GET | `/resident/documents` | Resident | Get own documents |
+
+---
+
+## Resident — Rent & Payments
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| GET | `/resident/rent` | Resident | Get own rent charges with payments |
+| GET | `/resident/rent/payment-config` | Resident | Get tenant's UPI/QR/bank details |
+| POST | `/resident/rent/:chargeId/pay` | Resident | Submit payment proof (multipart) |
+| GET | `/resident/rent/payments` | Resident | Get own payment history |
+
+### GET /resident/rent/payment-config
+Returns the tenant's configured UPI ID, QR code URL, bank account details. This is what the resident mobile app shows to guide the payment.
+
+### POST /resident/rent/:chargeId/pay
+```
+Content-Type: multipart/form-data
+Fields: transactionId (required), paymentMethod (default: UPI), amount (optional, defaults to remaining), notes, proof (image)
+```
+
+**Flow:**
+1. Resident views rent charges → sees pending amount
+2. Gets payment config (QR/UPI) → pays externally via UPI app
+3. Submits proof here → payment created with status=PENDING
+4. Tenant admin sees it in "Pending Proofs" → confirms or rejects
+5. On confirm → rent charge paidAmount updated, resident notified
+6. On reject → resident gets notification to resubmit
+
+---
+
+## Resident — Complaints
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| GET | `/resident/complaints` | Resident | Get own complaints |
+| POST | `/resident/complaints` | Resident | Submit a complaint |
+
+### POST /resident/complaints
+```json
+{ "title": "AC not working", "description": "AC has been non-functional for 2 days", "category": "MAINTENANCE", "priority": "HIGH" }
+```
+
+---
+
+## Resident — Visitors
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| GET | `/resident/visitors` | Resident | Get visitors I registered |
+| POST | `/resident/visitors` | Resident | Pre-register a visitor |
+
+### POST /resident/visitors
+```json
+{ "name": "Ravi Kumar", "phone": "9876543210", "purpose": "Family Visit" }
+```
+
+---
+
+## Resident — Notifications
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| GET | `/resident/notifications` | Resident | Get own notifications |
+| PUT | `/resident/notifications/:id/read` | Resident | Mark notification as read |
 
 ---
 
