@@ -1,21 +1,27 @@
 import admin from 'firebase-admin';
 
-// Initialize Firebase Admin SDK
-// In production, use GOOGLE_APPLICATION_CREDENTIALS env variable pointing to service account JSON
-// Or pass the service account directly via FIREBASE_SERVICE_ACCOUNT env variable (JSON string)
+let firebaseAuth = null;
 
-const serviceAccount = process.env.FIREBASE_SERVICE_ACCOUNT
-  ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)
-  : null;
+try {
+  const serviceAccount = process.env.FIREBASE_SERVICE_ACCOUNT
+    ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)
+    : null;
 
-if (!admin.apps.length) {
-  admin.initializeApp({
-    credential: serviceAccount
-      ? admin.credential.cert(serviceAccount)
-      : admin.credential.applicationDefault(),
-    projectId: process.env.FIREBASE_PROJECT_ID,
-  });
+  if (serviceAccount || process.env.FIREBASE_PROJECT_ID) {
+    const app = admin.initializeApp({
+      credential: serviceAccount
+        ? admin.credential.cert(serviceAccount)
+        : admin.credential.applicationDefault(),
+      projectId: process.env.FIREBASE_PROJECT_ID,
+    });
+    firebaseAuth = app.auth();
+    console.log('Firebase Admin initialized');
+  } else {
+    console.log('Firebase not configured — skipping initialization');
+  }
+} catch (err) {
+  console.warn('Firebase init failed:', err.message);
 }
 
-export const firebaseAuth = admin.auth();
+export { firebaseAuth };
 export default admin;

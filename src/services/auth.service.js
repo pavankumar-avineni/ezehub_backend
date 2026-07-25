@@ -202,6 +202,11 @@ class AuthService {
   // ─── FIREBASE PHONE AUTH ─────────────────────────────────────
 
   async residentFirebaseLogin(firebaseToken) {
+    // Check if Firebase is configured
+    if (!firebaseAuth) {
+      throw new UnauthorizedError('Firebase authentication is not configured on this server');
+    }
+
     // Verify the Firebase ID token
     let decodedToken;
     try {
