@@ -182,12 +182,26 @@ class AuthService {
 
     if (!resident) throw new UnauthorizedError('No active resident found');
     if (!resident.loginOtp || resident.loginOtp !== otp) throw new UnauthorizedError('Invalid OTP');
-    if (!resident.otpExpiresAt || resident.otpExpiresAt < new Date()) throw new UnauthorizedError('OTP expired');
+    if (!resident.otpExpiresAt || resident.otpExpiresAt < new Date()) {
+      // OTP expired — clear it and delete notification
+      await prisma.resident.update({ where: { id: resident.id }, data: { loginOtp: null, otpExpiresAt: null } });
+      await prisma.notification.deleteMany({ where: { tenantId: resident.tenantId, title: 'Resident Login OTP', message: { contains: phone } } });
+      throw new UnauthorizedError('OTP expired. Please request a new one.');
+    }
 
-    // Clear OTP after use
+  // Clear OTP after use
     await prisma.resident.update({
       where: { id: resident.id },
       data: { loginOtp: null, otpExpiresAt: null },
+    });
+
+    // Delete the OTP notification from tenant app
+    await prisma.notification.deleteMany({
+      where: {
+        tenantId: resident.tenantId,
+        title: 'Resident Login OTP',
+        message: { contains: phone },
+      },
     });
 
     return this._generateResidentTokens(resident);
