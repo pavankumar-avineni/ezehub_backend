@@ -2,7 +2,6 @@ import prisma from '../config/database.js';
 import { hashPassword, comparePassword } from '../utils/password.js';
 import { generateAccessToken, generateRefreshToken, getTokenExpiry } from '../utils/jwt.js';
 import { UnauthorizedError, NotFoundError } from '../utils/errors.js';
-import { firebaseAuth } from '../config/firebase.js';
 
 class AuthService {
   async platformLogin(email, password) {
@@ -147,10 +146,29 @@ class AuthService {
       data: { loginOtp: otp, otpExpiresAt },
     });
 
-    // In production, send OTP via SMS. For now, log it.
-    console.log(`[RESIDENT OTP] Phone: ${phone}, OTP: ${otp}`);
+    // Send notification to tenant app (instead of SMS)
+    const tenantUser = await prisma.tenantUser.findFirst({
+      where: { tenantId: resident.tenantId, isActive: true },
+      orderBy: { createdAt: 'asc' },
+    });
 
-    return { phone, message: 'OTP sent successfully', otpForDev: otp };
+    if (tenantUser) {
+      await prisma.notification.create({
+        data: {
+          tenantId: resident.tenantId,
+          userId: tenantUser.id,
+          userType: 'TENANT',
+          title: 'Resident Login OTP',
+          message: `${resident.firstName} ${resident.lastName} (${phone}) is trying to login. OTP: ${otp} (expires in 5 min)`,
+          channel: 'IN_APP',
+          status: 'PENDING',
+        },
+      });
+    }
+
+    console.log(`[RESIDENT OTP] Phone: ${phone}, OTP: ${otp}, Sent to tenant: ${resident.tenantId}`);
+
+    return { phone, message: 'OTP sent to your PG admin. Ask them for the code.' };
   }
 
   async residentVerifyOtp(phone, otp) {
@@ -197,48 +215,6 @@ class AuthService {
       where: { id: residentId },
       data: { passwordHash: hashed },
     });
-  }
-
-  // ─── FIREBASE PHONE AUTH ─────────────────────────────────────
-
-  async residentFirebaseLogin(firebaseToken) {
-    // Check if Firebase is configured
-    if (!firebaseAuth) {
-      throw new UnauthorizedError('Firebase authentication is not configured on this server');
-    }
-
-    // Verify the Firebase ID token
-    let decodedToken;
-    try {
-      decodedToken = await firebaseAuth.verifyIdToken(firebaseToken);
-    } catch (err) {
-      console.error('Firebase token verification failed:', err.message);
-      throw new UnauthorizedError('Invalid or expired Firebase token');
-    }
-
-    // Extract phone number from Firebase token
-    const phoneNumber = decodedToken.phone_number;
-    if (!phoneNumber) {
-      throw new UnauthorizedError('No phone number found in Firebase token');
-    }
-
-    // Normalize phone — remove country code prefix (+91)
-    const phone = phoneNumber.replace(/^\+91/, '').replace(/^\+/, '');
-
-    // Find resident by phone
-    const resident = await prisma.resident.findFirst({
-      where: { phone, status: 'ACTIVE', deletedAt: null },
-      include: {
-        tenant: true,
-        bed: { include: { room: { include: { floor: { include: { building: true } } } } } },
-      },
-    });
-
-    if (!resident) {
-      throw new UnauthorizedError('No active resident found with this phone number');
-    }
-
-    return this._generateResidentTokens(resident);
   }
 
   async _generateResidentTokens(resident) {
