@@ -69,3 +69,10 @@ export const residentSetPassword = async (req, res, next) => {
     successResponse(res, null, 'Password set successfully');
   } catch (error) { next(error); }
 };
+
+export const residentFirebaseLogin = async (req, res, next) => {
+  try {
+    const result = await authService.residentFirebaseLogin(req.body.firebaseToken);
+    successResponse(res, result, 'Login successful');
+  } catch (error) { next(error); }
+};

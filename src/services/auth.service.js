@@ -2,6 +2,7 @@ import prisma from '../config/database.js';
 import { hashPassword, comparePassword } from '../utils/password.js';
 import { generateAccessToken, generateRefreshToken, getTokenExpiry } from '../utils/jwt.js';
 import { UnauthorizedError, NotFoundError } from '../utils/errors.js';
+import { firebaseAuth } from '../config/firebase.js';
 
 class AuthService {
   async platformLogin(email, password) {
@@ -196,6 +197,43 @@ class AuthService {
       where: { id: residentId },
       data: { passwordHash: hashed },
     });
+  }
+
+  // ─── FIREBASE PHONE AUTH ─────────────────────────────────────
+
+  async residentFirebaseLogin(firebaseToken) {
+    // Verify the Firebase ID token
+    let decodedToken;
+    try {
+      decodedToken = await firebaseAuth.verifyIdToken(firebaseToken);
+    } catch (err) {
+      console.error('Firebase token verification failed:', err.message);
+      throw new UnauthorizedError('Invalid or expired Firebase token');
+    }
+
+    // Extract phone number from Firebase token
+    const phoneNumber = decodedToken.phone_number;
+    if (!phoneNumber) {
+      throw new UnauthorizedError('No phone number found in Firebase token');
+    }
+
+    // Normalize phone — remove country code prefix (+91)
+    const phone = phoneNumber.replace(/^\+91/, '').replace(/^\+/, '');
+
+    // Find resident by phone
+    const resident = await prisma.resident.findFirst({
+      where: { phone, status: 'ACTIVE', deletedAt: null },
+      include: {
+        tenant: true,
+        bed: { include: { room: { include: { floor: { include: { building: true } } } } } },
+      },
+    });
+
+    if (!resident) {
+      throw new UnauthorizedError('No active resident found with this phone number');
+    }
+
+    return this._generateResidentTokens(resident);
   }
 
   async _generateResidentTokens(resident) {
