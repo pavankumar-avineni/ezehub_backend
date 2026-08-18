@@ -12,15 +12,16 @@ class StaffService {
       let tenantUserId = null;
 
       if (data.createUserAccount && data.password) {
+        const loginEmail = data.loginEmail || data.email;
         const existing = await tx.tenantUser.findFirst({
-          where: { tenantId, email: data.email },
+          where: { tenantId, email: loginEmail },
         });
         if (existing) throw new ConflictError('User with this email already exists');
 
         const user = await tx.tenantUser.create({
           data: {
             tenantId,
-            email: data.email,
+            email: loginEmail,
             passwordHash: await hashPassword(data.password),
             firstName: data.firstName,
             lastName: data.lastName,
