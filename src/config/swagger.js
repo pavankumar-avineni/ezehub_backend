@@ -41,6 +41,14 @@ const options = {
       { name: 'Resident - Visitors', description: 'Visitor pre-registration' },
       { name: 'Resident - Notifications', description: 'Resident notifications' },
       { name: 'Resident - Documents', description: 'Resident documents' },
+      { name: 'Tenant - Discounts', description: 'Discount management' },
+      { name: 'Tenant - Promotions', description: 'Promotional activities & partner tie-ups' },
+      { name: 'Tenant - Food Menu', description: 'Building-wise food menu management' },
+      { name: 'Tenant - Roles', description: 'Dynamic role & permission management' },
+      { name: 'Tenant - Bed Map', description: 'Visual bed occupancy map' },
+      { name: 'Resident - Discounts', description: 'View active discounts' },
+      { name: 'Resident - Promotions', description: 'View partner promotions' },
+      { name: 'Resident - Food Menu', description: 'View building food menu' },
     ],
     components: {
       securitySchemes: {
@@ -951,6 +959,93 @@ const options = {
           summary: 'Get own documents',
           responses: { 200: { description: 'Documents list' } },
         },
+      },
+
+      // ═══════════════════════════════════════════════════════════
+      // TENANT - DISCOUNTS
+      // ═══════════════════════════════════════════════════════════
+      '/tenant/discounts': {
+        get: { tags: ['Tenant - Discounts'], summary: 'List discounts', parameters: [{ name: 'isActive', in: 'query', schema: { type: 'string' } }, { name: 'category', in: 'query', schema: { type: 'string' } }], responses: { 200: { description: 'Discounts list' } } },
+        post: { tags: ['Tenant - Discounts'], summary: 'Create discount', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['name', 'type', 'value', 'startDate'], properties: { name: { type: 'string' }, description: { type: 'string' }, type: { type: 'string', enum: ['FLAT', 'PERCENTAGE'] }, value: { type: 'number' }, scope: { type: 'string', enum: ['ALL_RESIDENTS', 'SPECIFIC_RESIDENTS', 'SPECIFIC_BUILDINGS'] }, buildingIds: { type: 'array', items: { type: 'string' } }, residentIds: { type: 'array', items: { type: 'string' } }, category: { type: 'string' }, minStayMonths: { type: 'integer' }, startDate: { type: 'string', format: 'date' }, endDate: { type: 'string', format: 'date' }, maxUsage: { type: 'integer' } } } } } }, responses: { 201: { description: 'Discount created' } } },
+      },
+      '/tenant/discounts/{id}': {
+        get: { tags: ['Tenant - Discounts'], summary: 'Get discount', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }], responses: { 200: { description: 'Discount details' } } },
+        put: { tags: ['Tenant - Discounts'], summary: 'Update discount', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }], responses: { 200: { description: 'Discount updated' } } },
+        delete: { tags: ['Tenant - Discounts'], summary: 'Delete discount', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }], responses: { 200: { description: 'Discount deleted' } } },
+      },
+
+      // ═══════════════════════════════════════════════════════════
+      // TENANT - PROMOTIONS
+      // ═══════════════════════════════════════════════════════════
+      '/tenant/promotions': {
+        get: { tags: ['Tenant - Promotions'], summary: 'List promotions', parameters: [{ name: 'isActive', in: 'query', schema: { type: 'string' } }, { name: 'category', in: 'query', schema: { type: 'string' } }], responses: { 200: { description: 'Promotions list' } } },
+        post: { tags: ['Tenant - Promotions'], summary: 'Create promotion', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['businessName', 'category', 'startDate'], properties: { businessName: { type: 'string' }, category: { type: 'string', enum: ['FOOD', 'LAUNDRY', 'GYM', 'HOTEL', 'TRANSPORT', 'PG', 'CLOUD_KITCHEN', 'OTHER'] }, description: { type: 'string' }, contactPhone: { type: 'string' }, contactEmail: { type: 'string' }, website: { type: 'string' }, address: { type: 'string' }, offerText: { type: 'string' }, photos: { type: 'array', items: { type: 'string' }, maxItems: 3 }, startDate: { type: 'string', format: 'date' }, endDate: { type: 'string', format: 'date' } } } } } }, responses: { 201: { description: 'Promotion created' } } },
+      },
+      '/tenant/promotions/{id}': {
+        get: { tags: ['Tenant - Promotions'], summary: 'Get promotion', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }], responses: { 200: { description: 'Promotion details' } } },
+        put: { tags: ['Tenant - Promotions'], summary: 'Update promotion', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }], responses: { 200: { description: 'Promotion updated' } } },
+        delete: { tags: ['Tenant - Promotions'], summary: 'Delete promotion', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }], responses: { 200: { description: 'Promotion deleted' } } },
+      },
+
+      // ═══════════════════════════════════════════════════════════
+      // TENANT - FOOD MENU
+      // ═══════════════════════════════════════════════════════════
+      '/tenant/menu/{buildingId}': {
+        get: { tags: ['Tenant - Food Menu'], summary: 'Get weekly menu for a building', parameters: [{ name: 'buildingId', in: 'path', required: true, schema: { type: 'string' } }], responses: { 200: { description: 'Weekly menu organized by day' } } },
+      },
+      '/tenant/menu/{buildingId}/today': {
+        get: { tags: ['Tenant - Food Menu'], summary: 'Get today menu for a building', parameters: [{ name: 'buildingId', in: 'path', required: true, schema: { type: 'string' } }], responses: { 200: { description: 'Today meals' } } },
+      },
+      '/tenant/menu': {
+        post: { tags: ['Tenant - Food Menu'], summary: 'Save a menu item', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['buildingId', 'dayOfWeek', 'mealType', 'items'], properties: { buildingId: { type: 'string' }, dayOfWeek: { type: 'integer', minimum: 0, maximum: 6, description: '0=Sunday, 6=Saturday' }, mealType: { type: 'string', enum: ['BREAKFAST', 'LUNCH', 'SNACKS', 'DINNER'] }, items: { type: 'array', items: { type: 'string' } } } } } } }, responses: { 200: { description: 'Menu saved' } } },
+      },
+      '/tenant/menu/bulk': {
+        post: { tags: ['Tenant - Food Menu'], summary: 'Bulk save menu items', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['buildingId', 'menus'], properties: { buildingId: { type: 'string' }, menus: { type: 'array', items: { type: 'object', properties: { dayOfWeek: { type: 'integer' }, mealType: { type: 'string' }, items: { type: 'array', items: { type: 'string' } } } } } } } } } }, responses: { 200: { description: 'Menu items saved' } } },
+      },
+
+      // ═══════════════════════════════════════════════════════════
+      // TENANT - ROLES & PERMISSIONS
+      // ═══════════════════════════════════════════════════════════
+      '/tenant/roles': {
+        get: { tags: ['Tenant - Roles'], summary: 'List all roles with permissions', responses: { 200: { description: 'Roles with permission count' } } },
+        post: { tags: ['Tenant - Roles'], summary: 'Create a new role', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['name'], properties: { name: { type: 'string' }, slug: { type: 'string' }, description: { type: 'string' }, permissionIds: { type: 'array', items: { type: 'string' } } } } } } }, responses: { 201: { description: 'Role created' } } },
+      },
+      '/tenant/roles/{id}': {
+        put: { tags: ['Tenant - Roles'], summary: 'Update role', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }], responses: { 200: { description: 'Role updated' } } },
+        delete: { tags: ['Tenant - Roles'], summary: 'Delete role', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }], responses: { 200: { description: 'Role deleted' } } },
+      },
+      '/tenant/permissions': {
+        get: { tags: ['Tenant - Roles'], summary: 'List all available permissions', responses: { 200: { description: 'All system permissions grouped by module' } } },
+      },
+      '/tenant/roles/{id}/permissions': {
+        put: { tags: ['Tenant - Roles'], summary: 'Update permissions for a role', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['permissionIds'], properties: { permissionIds: { type: 'array', items: { type: 'string' } } } } } } }, responses: { 200: { description: 'Permissions updated' } } },
+      },
+
+      // ═══════════════════════════════════════════════════════════
+      // TENANT - BED MAP
+      // ═══════════════════════════════════════════════════════════
+      '/tenant/bed-map/{buildingId}': {
+        get: { tags: ['Tenant - Bed Map'], summary: 'Get visual bed map for a building', description: 'Returns floors → rooms → beds with occupancy status and resident gender. Blue=Boy occupied, Pink=Girl occupied, Grey=Available.', parameters: [{ name: 'buildingId', in: 'path', required: true, schema: { type: 'string' } }], responses: { 200: { description: 'Bed map data with gender info' } } },
+      },
+
+      // ═══════════════════════════════════════════════════════════
+      // RESIDENT - DISCOUNTS, PROMOTIONS, MENU
+      // ═══════════════════════════════════════════════════════════
+      '/resident/discounts': {
+        get: { tags: ['Resident - Discounts'], summary: 'Get active discounts for me', responses: { 200: { description: 'Applicable discounts' } } },
+      },
+      '/resident/promotions': {
+        get: { tags: ['Resident - Promotions'], summary: 'Get active promotions & offers', responses: { 200: { description: 'Active promotions' } } },
+      },
+      '/resident/menu': {
+        get: { tags: ['Resident - Food Menu'], summary: 'Get weekly menu for my building', responses: { 200: { description: 'Weekly menu' } } },
+      },
+      '/resident/menu/today': {
+        get: { tags: ['Resident - Food Menu'], summary: 'Get today menu', responses: { 200: { description: 'Today meals' } } },
+      },
+      '/resident/complaints/{id}/comments': {
+        get: { tags: ['Resident - Complaints'], summary: 'Get complaint replies/comments', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }], responses: { 200: { description: 'Comments thread' } } },
+        post: { tags: ['Resident - Complaints'], summary: 'Reply to a complaint', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['comment'], properties: { comment: { type: 'string' } } } } } }, responses: { 201: { description: 'Reply added' } } },
       },
     },
   },

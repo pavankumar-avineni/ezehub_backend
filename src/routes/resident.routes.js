@@ -256,4 +256,81 @@ router.get('/documents', async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+// GET /resident/discounts - Get active discounts for this resident
+router.get('/discounts', async (req, res, next) => {
+  try {
+    const { default: discountService } = await import('../services/discount.service.js');
+    const discounts = await discountService.getResidentDiscounts(req.user.tenantId, req.user.userId);
+    successResponse(res, discounts);
+  } catch (error) { next(error); }
+});
+
+// GET /resident/promotions - Get active promotions from tenant
+router.get('/promotions', async (req, res, next) => {
+  try {
+    const { default: promotionService } = await import('../services/promotion.service.js');
+    const promotions = await promotionService.getActivePromotions(req.user.tenantId);
+    successResponse(res, promotions);
+  } catch (error) { next(error); }
+});
+
+// GET /resident/menu - Get food menu for my building
+router.get('/menu', async (req, res, next) => {
+  try {
+    const resident = await prisma.resident.findFirst({
+      where: { id: req.user.userId },
+      include: { bed: true },
+    });
+    if (!resident?.bed?.buildingId) return successResponse(res, {});
+    const { default: foodMenuService } = await import('../services/foodmenu.service.js');
+    const menu = await foodMenuService.getWeeklyMenu(req.user.tenantId, resident.bed.buildingId);
+    successResponse(res, menu);
+  } catch (error) { next(error); }
+});
+
+// GET /resident/menu/today - Get today's menu
+router.get('/menu/today', async (req, res, next) => {
+  try {
+    const resident = await prisma.resident.findFirst({
+      where: { id: req.user.userId },
+      include: { bed: true },
+    });
+    if (!resident?.bed?.buildingId) return successResponse(res, []);
+    const { default: foodMenuService } = await import('../services/foodmenu.service.js');
+    const menu = await foodMenuService.getTodayMenu(req.user.tenantId, resident.bed.buildingId);
+    successResponse(res, menu);
+  } catch (error) { next(error); }
+});
+
+// POST /resident/complaints/:id/comments - Add comment to a complaint
+router.post('/complaints/:id/comments', async (req, res, next) => {
+  try {
+    const complaint = await prisma.complaint.findFirst({
+      where: { id: req.params.id, residentId: req.user.userId },
+    });
+    if (!complaint) return res.status(404).json({ success: false, message: 'Complaint not found' });
+
+    const comment = await prisma.complaintComment.create({
+      data: {
+        complaintId: req.params.id,
+        userId: req.user.userId,
+        userType: 'RESIDENT',
+        comment: req.body.comment,
+      },
+    });
+    successResponse(res, comment, 'Reply added', 201);
+  } catch (error) { next(error); }
+});
+
+// GET /resident/complaints/:id/comments - Get comments for a complaint
+router.get('/complaints/:id/comments', async (req, res, next) => {
+  try {
+    const comments = await prisma.complaintComment.findMany({
+      where: { complaintId: req.params.id },
+      orderBy: { createdAt: 'asc' },
+    });
+    successResponse(res, comments);
+  } catch (error) { next(error); }
+});
+
 export default router;

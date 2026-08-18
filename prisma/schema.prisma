@@ -335,6 +335,9 @@ model Tenant {
   maintenanceRequests MaintenanceRequest[]
   agreements      Agreement[]
   billingInvoices BillingInvoice[]
+  discounts       Discount[]
+  promotions      Promotion[]
+  foodMenus       FoodMenu[]
 
   @@index([status])
   @@index([slug])
@@ -517,6 +520,7 @@ model Building {
   incomeRecords  IncomeRecord[]
   expenseRecords ExpenseRecord[]
   maintenanceRequests MaintenanceRequest[]
+  foodMenus      FoodMenu[]
 
   @@unique([tenantId, code])
   @@index([tenantId])
@@ -1163,4 +1167,110 @@ model AuditLog {
   @@index([entity])
   @@index([createdAt])
   @@map("audit_logs")
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// DISCOUNTS
+// ═══════════════════════════════════════════════════════════════
+
+enum DiscountType {
+  FLAT
+  PERCENTAGE
+}
+
+enum DiscountScope {
+  ALL_RESIDENTS
+  SPECIFIC_RESIDENTS
+  SPECIFIC_BUILDINGS
+}
+
+model Discount {
+  id            String        @id @default(uuid())
+  tenantId      String        @map("tenant_id")
+  name          String
+  description   String?
+  type          DiscountType
+  value         Decimal       @db.Decimal(12, 2)
+  scope         DiscountScope @default(ALL_RESIDENTS)
+  buildingIds   Json          @default("[]") @map("building_ids")
+  residentIds   Json          @default("[]") @map("resident_ids")
+  category      String        @default("GENERAL")
+  minStayMonths Int?          @map("min_stay_months")
+  conditions    Json          @default("{}")
+  isActive      Boolean       @default(true) @map("is_active")
+  startDate     DateTime      @map("start_date")
+  endDate       DateTime?     @map("end_date")
+  maxUsage      Int?          @map("max_usage")
+  usageCount    Int           @default(0) @map("usage_count")
+  createdAt     DateTime      @default(now()) @map("created_at")
+  updatedAt     DateTime      @updatedAt @map("updated_at")
+  deletedAt     DateTime?     @map("deleted_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId])
+  @@index([isActive])
+  @@map("discounts")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PROMOTIONS
+// ═══════════════════════════════════════════════════════════════
+
+model Promotion {
+  id            String    @id @default(uuid())
+  tenantId      String    @map("tenant_id")
+  businessName  String    @map("business_name")
+  category      String
+  description   String?
+  contactPhone  String?   @map("contact_phone")
+  contactEmail  String?   @map("contact_email")
+  website       String?
+  address       String?
+  offerText     String?   @map("offer_text")
+  photos        Json      @default("[]")
+  isActive      Boolean   @default(true) @map("is_active")
+  startDate     DateTime  @map("start_date")
+  endDate       DateTime? @map("end_date")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+  deletedAt     DateTime? @map("deleted_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId])
+  @@index([isActive])
+  @@map("promotions")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// FOOD MENU
+// ═══════════════════════════════════════════════════════════════
+
+enum MealType {
+  BREAKFAST
+  LUNCH
+  SNACKS
+  DINNER
+}
+
+model FoodMenu {
+  id         String   @id @default(uuid())
+  tenantId   String   @map("tenant_id")
+  buildingId String   @map("building_id")
+  dayOfWeek  Int      @map("day_of_week")
+  mealType   MealType @map("meal_type")
+  items      Json     @default("[]")
+  isActive   Boolean  @default(true) @map("is_active")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id])
+  building Building @relation(fields: [buildingId], references: [id])
+
+  @@unique([tenantId, buildingId, dayOfWeek, mealType])
+  @@index([tenantId])
+  @@index([buildingId])
+  @@map("food_menus")
 }

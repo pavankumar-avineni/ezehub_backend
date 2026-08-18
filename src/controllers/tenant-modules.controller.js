@@ -8,7 +8,11 @@ import { complaintService, visitorService } from '../services/complaint.service.
 import { financeService, maintenanceService } from '../services/finance.service.js';
 import { documentService, notificationService, reportService } from '../services/document.service.js';
 import tenantService from '../services/tenant.service.js';
+import discountService from '../services/discount.service.js';
+import promotionService from '../services/promotion.service.js';
+import foodMenuService from '../services/foodmenu.service.js';
 import prisma from '../config/database.js';
+import { hashPassword } from '../utils/password.js';
 import { successResponse, paginatedResponse, generateReceiptNumber } from '../utils/response.js';
 
 const wrap = (fn) => async (req, res, next) => {
@@ -571,4 +575,213 @@ export const getOccupancyReport = wrap(async (req, res) => {
 export const getRentCollectionReport = wrap(async (req, res) => {
   const report = await reportService.getRentCollectionReport(req.tenantId, parseInt(req.query.month), parseInt(req.query.year));
   successResponse(res, report);
+});
+
+
+// ═══════════════════════════════════════════════════════════════
+// DISCOUNTS
+// ═══════════════════════════════════════════════════════════════
+
+export const getDiscounts = wrap(async (req, res) => {
+  const result = await discountService.findAll(req.tenantId, req.query);
+  paginatedResponse(res, result.discounts, result.pagination);
+});
+
+export const createDiscount = wrap(async (req, res) => {
+  const discount = await discountService.create(req.tenantId, req.body);
+  successResponse(res, discount, 'Discount created', 201);
+});
+
+export const getDiscount = wrap(async (req, res) => {
+  const discount = await discountService.findById(req.tenantId, req.params.id);
+  successResponse(res, discount);
+});
+
+export const updateDiscount = wrap(async (req, res) => {
+  const discount = await discountService.update(req.tenantId, req.params.id, req.body);
+  successResponse(res, discount, 'Discount updated');
+});
+
+export const deleteDiscount = wrap(async (req, res) => {
+  await discountService.delete(req.tenantId, req.params.id);
+  successResponse(res, null, 'Discount deleted');
+});
+
+// ═══════════════════════════════════════════════════════════════
+// PROMOTIONS
+// ═══════════════════════════════════════════════════════════════
+
+export const getPromotions = wrap(async (req, res) => {
+  const result = await promotionService.findAll(req.tenantId, req.query);
+  paginatedResponse(res, result.promotions, result.pagination);
+});
+
+export const createPromotion = wrap(async (req, res) => {
+  const promo = await promotionService.create(req.tenantId, req.body);
+  successResponse(res, promo, 'Promotion created', 201);
+});
+
+export const getPromotion = wrap(async (req, res) => {
+  const promo = await promotionService.findById(req.tenantId, req.params.id);
+  successResponse(res, promo);
+});
+
+export const updatePromotion = wrap(async (req, res) => {
+  const promo = await promotionService.update(req.tenantId, req.params.id, req.body);
+  successResponse(res, promo, 'Promotion updated');
+});
+
+export const deletePromotion = wrap(async (req, res) => {
+  await promotionService.delete(req.tenantId, req.params.id);
+  successResponse(res, null, 'Promotion deleted');
+});
+
+// ═══════════════════════════════════════════════════════════════
+// FOOD MENU
+// ═══════════════════════════════════════════════════════════════
+
+export const getWeeklyMenu = wrap(async (req, res) => {
+  const menu = await foodMenuService.getWeeklyMenu(req.tenantId, req.params.buildingId);
+  successResponse(res, menu);
+});
+
+export const getTodayMenu = wrap(async (req, res) => {
+  const menu = await foodMenuService.getTodayMenu(req.tenantId, req.params.buildingId);
+  successResponse(res, menu);
+});
+
+export const upsertMenu = wrap(async (req, res) => {
+  const menu = await foodMenuService.upsert(req.tenantId, req.body);
+  successResponse(res, menu, 'Menu saved');
+});
+
+export const bulkUpsertMenu = wrap(async (req, res) => {
+  const { buildingId, menus } = req.body;
+  const results = await foodMenuService.bulkUpsert(req.tenantId, buildingId, menus);
+  successResponse(res, results, `${results.length} menu items saved`);
+});
+
+export const deleteMenu = wrap(async (req, res) => {
+  await foodMenuService.delete(req.tenantId, req.params.id);
+  successResponse(res, null, 'Menu deleted');
+});
+
+// ═══════════════════════════════════════════════════════════════
+// ROLES & PERMISSIONS
+// ═══════════════════════════════════════════════════════════════
+
+export const getRoles = wrap(async (req, res) => {
+  const roles = await prisma.role.findMany({
+    where: { tenantId: req.tenantId, deletedAt: null },
+    include: { permissions: { include: { permission: true } }, _count: { select: { tenantUsers: true, staffMembers: true } } },
+    orderBy: { createdAt: 'asc' },
+  });
+  successResponse(res, roles);
+});
+
+export const createRole = wrap(async (req, res) => {
+  const { name, slug, description, permissionIds } = req.body;
+  const role = await prisma.role.create({
+    data: { name, slug: slug || name.toLowerCase().replace(/\s+/g, '-'), description, scope: 'TENANT', tenantId: req.tenantId },
+  });
+  if (permissionIds?.length) {
+    await prisma.rolePermission.createMany({
+      data: permissionIds.map((pid) => ({ roleId: role.id, permissionId: pid })),
+    });
+  }
+  successResponse(res, role, 'Role created', 201);
+});
+
+export const updateRole = wrap(async (req, res) => {
+  const { name, description } = req.body;
+  const role = await prisma.role.update({
+    where: { id: req.params.id },
+    data: { name, description },
+  });
+  successResponse(res, role, 'Role updated');
+});
+
+export const deleteRole = wrap(async (req, res) => {
+  await prisma.role.update({ where: { id: req.params.id }, data: { deletedAt: new Date() } });
+  successResponse(res, null, 'Role deleted');
+});
+
+export const getPermissions = wrap(async (req, res) => {
+  const permissions = await prisma.permission.findMany({ orderBy: { module: 'asc' } });
+  successResponse(res, permissions);
+});
+
+export const updateRolePermissions = wrap(async (req, res) => {
+  const { permissionIds } = req.body;
+  const roleId = req.params.id;
+
+  // Delete existing and recreate
+  await prisma.rolePermission.deleteMany({ where: { roleId } });
+  if (permissionIds?.length) {
+    await prisma.rolePermission.createMany({
+      data: permissionIds.map((pid) => ({ roleId, permissionId: pid })),
+    });
+  }
+
+  const role = await prisma.role.findUnique({
+    where: { id: roleId },
+    include: { permissions: { include: { permission: true } } },
+  });
+  successResponse(res, role, 'Permissions updated');
+});
+
+// ═══════════════════════════════════════════════════════════════
+// BED VISUAL MAP
+// ═══════════════════════════════════════════════════════════════
+
+export const getBedMap = wrap(async (req, res) => {
+  const { buildingId } = req.params;
+
+  const floors = await prisma.floor.findMany({
+    where: { buildingId, tenantId: req.tenantId, deletedAt: null },
+    orderBy: { number: 'asc' },
+    include: {
+      rooms: {
+        where: { deletedAt: null },
+        orderBy: { number: 'asc' },
+        include: {
+          beds: {
+            where: { deletedAt: null },
+            orderBy: { label: 'asc' },
+            include: {
+              residents: {
+                where: { status: 'ACTIVE', deletedAt: null },
+                select: { id: true, firstName: true, lastName: true, gender: true, phone: true },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  // Transform to visual map format
+  const map = floors.map((floor) => ({
+    id: floor.id,
+    name: floor.name,
+    number: floor.number,
+    rooms: floor.rooms.map((room) => ({
+      id: room.id,
+      name: room.name,
+      number: room.number,
+      status: room.status,
+      beds: room.beds.map((bed) => {
+        const resident = bed.residents?.[0] || null;
+        return {
+          id: bed.id,
+          label: bed.label,
+          status: bed.status,
+          gender: resident?.gender || null,
+          resident: resident ? { id: resident.id, name: `${resident.firstName} ${resident.lastName}`, gender: resident.gender, phone: resident.phone } : null,
+        };
+      }),
+    })),
+  }));
+
+  successResponse(res, map);
 });

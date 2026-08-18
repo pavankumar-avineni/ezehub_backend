@@ -143,4 +143,36 @@ router.post('/notifications', authorize(PERMISSIONS.NOTIFICATIONS_MANAGE), valid
 router.put('/notifications/:id/read', validate(idParamSchema), ctrl.markNotificationRead);
 router.put('/notifications/read-all', ctrl.markAllNotificationsRead);
 
+// Discounts
+router.get('/discounts', ctrl.getDiscounts);
+router.post('/discounts', ctrl.createDiscount);
+router.get('/discounts/:id', ctrl.getDiscount);
+router.put('/discounts/:id', ctrl.updateDiscount);
+router.delete('/discounts/:id', ctrl.deleteDiscount);
+
+// Promotions
+router.get('/promotions', ctrl.getPromotions);
+router.post('/promotions', ctrl.createPromotion);
+router.get('/promotions/:id', ctrl.getPromotion);
+router.put('/promotions/:id', ctrl.updatePromotion);
+router.delete('/promotions/:id', ctrl.deletePromotion);
+
+// Food Menu
+router.get('/menu/:buildingId', ctrl.getWeeklyMenu);
+router.get('/menu/:buildingId/today', ctrl.getTodayMenu);
+router.post('/menu', ctrl.upsertMenu);
+router.post('/menu/bulk', ctrl.bulkUpsertMenu);
+router.delete('/menu/:id', ctrl.deleteMenu);
+
+// Roles & Permissions
+router.get('/roles', ctrl.getRoles);
+router.post('/roles', ctrl.createRole);
+router.put('/roles/:id', ctrl.updateRole);
+router.delete('/roles/:id', ctrl.deleteRole);
+router.get('/permissions', ctrl.getPermissions);
+router.put('/roles/:id/permissions', ctrl.updateRolePermissions);
+
+// Bed Visual Map
+router.get('/bed-map/:buildingId', ctrl.getBedMap);
+
 export default router;
