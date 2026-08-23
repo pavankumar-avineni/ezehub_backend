@@ -381,6 +381,9 @@ export const getPaymentSettings = wrap(async (req, res) => {
     paymentIfscCode: settings.paymentIfscCode || '',
     paymentAccountHolder: settings.paymentAccountHolder || '',
     paymentInstructions: settings.paymentInstructions || '',
+    razorpayKeyId: settings.razorpayKeyId || '',
+    razorpayKeySecret: settings.razorpayKeySecret ? '••••••••' : '',
+    razorpayConfigured: !!(settings.razorpayKeyId && settings.razorpayKeySecret),
   });
 });
 
@@ -390,7 +393,7 @@ export const updatePaymentSettings = wrap(async (req, res) => {
     select: { settings: true },
   });
   const currentSettings = typeof tenant.settings === 'string' ? JSON.parse(tenant.settings) : (tenant.settings || {});
-  const { paymentQrUrl, paymentUpiId, paymentBankName, paymentAccountNumber, paymentIfscCode, paymentAccountHolder, paymentInstructions } = req.body;
+  const { paymentQrUrl, paymentUpiId, paymentBankName, paymentAccountNumber, paymentIfscCode, paymentAccountHolder, paymentInstructions, razorpayKeyId, razorpayKeySecret } = req.body;
 
   const updatedSettings = {
     ...currentSettings,
@@ -401,6 +404,8 @@ export const updatePaymentSettings = wrap(async (req, res) => {
     ...(paymentIfscCode !== undefined && { paymentIfscCode }),
     ...(paymentAccountHolder !== undefined && { paymentAccountHolder }),
     ...(paymentInstructions !== undefined && { paymentInstructions }),
+    ...(razorpayKeyId !== undefined && { razorpayKeyId }),
+    ...(razorpayKeySecret !== undefined && razorpayKeySecret !== '••••••••' && { razorpayKeySecret }),
   };
 
   await prisma.tenant.update({
@@ -408,7 +413,7 @@ export const updatePaymentSettings = wrap(async (req, res) => {
     data: { settings: updatedSettings },
   });
 
-  successResponse(res, updatedSettings, 'Payment settings updated');
+  successResponse(res, { ...updatedSettings, razorpayKeySecret: updatedSettings.razorpayKeySecret ? '••••••••' : '' }, 'Payment settings updated');
 });
 
 // Complaints

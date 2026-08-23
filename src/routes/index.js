@@ -4,6 +4,7 @@ import platformRoutes from './platform.routes.js';
 import tenantRoutes from './tenant.routes.js';
 import residentRoutes from './resident.routes.js';
 import subscriptionRoutes from './subscription.routes.js';
+import paymentRoutes from './payment.routes.js';
 
 const router = Router();
 
@@ -16,5 +17,6 @@ router.use('/platform/tenants', platformRoutes);
 router.use('/tenant', tenantRoutes);
 router.use('/resident', residentRoutes);
 router.use('/subscription', subscriptionRoutes);
+router.use('/payment', paymentRoutes);
 
 export default router;
