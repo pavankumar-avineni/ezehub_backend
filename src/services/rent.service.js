@@ -8,37 +8,59 @@ class RentService {
     const where = { tenantId, status: 'ACTIVE', deletedAt: null };
     if (buildingId) where.bed = { buildingId };
 
+    // 1) Load candidate residents (with their bed rent) in one query.
     const residents = await prisma.resident.findMany({
       where,
-      include: { bed: true },
+      include: { bed: { select: { rentAmount: true } } },
     });
 
+    if (residents.length === 0) {
+      return { generated: 0, skipped: 0, charges: [] };
+    }
+
+    // 2) Fetch all existing charges for this period in one query instead of
+    //    one findUnique per resident (removes the N+1).
+    const residentIds = residents.map((r) => r.id);
+    const existing = await prisma.rentCharge.findMany({
+      where: { tenantId, month, year, residentId: { in: residentIds } },
+      select: { residentId: true },
+    });
+    const alreadyCharged = new Set(existing.map((c) => c.residentId));
+
     const dueDate = new Date(year, month, 5);
-    const results = [];
-
-    for (const resident of residents) {
-      const existing = await prisma.rentCharge.findUnique({
-        where: { residentId_month_year: { residentId: resident.id, month, year } },
-      });
-
-      if (existing) continue;
-
-      const rentAmount = resident.bed?.rentAmount || 0;
-      const charge = await prisma.rentCharge.create({
-        data: {
+    const toCreate = residents
+      .filter((r) => !alreadyCharged.has(r.id))
+      .map((r) => {
+        const rentAmount = r.bed?.rentAmount || 0;
+        return {
           tenantId,
-          residentId: resident.id,
+          residentId: r.id,
           month,
           year,
           rentAmount,
           totalAmount: rentAmount,
           dueDate,
-        },
+        };
       });
-      results.push(charge);
+
+    if (toCreate.length === 0) {
+      return { generated: 0, skipped: residents.length, charges: [] };
     }
 
-    return { generated: results.length, charges: results };
+    // 3) Bulk insert + read back inside a single transaction so the whole
+    //    run is atomic (no partial generation on failure).
+    const charges = await prisma.$transaction(async (tx) => {
+      await tx.rentCharge.createMany({ data: toCreate, skipDuplicates: true });
+      return tx.rentCharge.findMany({
+        where: { tenantId, month, year, residentId: { in: toCreate.map((c) => c.residentId) } },
+      });
+    });
+
+    return {
+      generated: charges.length,
+      skipped: residents.length - toCreate.length,
+      charges,
+    };
   }
 
   async findAllCharges(tenantId, query) {

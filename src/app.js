@@ -6,9 +6,12 @@ import rateLimit from 'express-rate-limit';
 import swaggerUi from 'swagger-ui-express';
 
 import config from './config/index.js';
+import prisma from './config/database.js';
+import redis from './config/redis.js';
 import routes from './routes/index.js';
 import { requestLogger } from './middleware/logger.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
+import { apiLimiter } from './middleware/rateLimit.js';
 import swaggerSpec from './config/swagger.js';
 
 const app = express();
@@ -64,32 +67,51 @@ app.get('/', (req, res) => {
 });
 
 /**
- * Health Check
+ * Liveness probe — is the process up? Cheap, never touches dependencies.
  */
-app.get('/api/health', (req, res) => {
-  res.status(200).json({
-    success: true,
-    status: 'OK',
+app.get('/api/health/live', (_req, res) => {
+  res.status(200).json({ success: true, status: 'alive', timestamp: new Date().toISOString() });
+});
+
+/**
+ * Readiness / deep health check — verifies the database (and Redis if
+ * configured) are reachable. Returns 503 when a dependency is down so
+ * orchestrators and load balancers stop routing traffic to this instance.
+ */
+app.get('/api/health', async (_req, res) => {
+  const checks = { database: 'down', redis: config.redisEnabled ? 'down' : 'disabled' };
+
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    checks.database = 'up';
+  } catch {
+    checks.database = 'down';
+  }
+
+  if (config.redisEnabled && redis) {
+    try {
+      await redis.ping();
+      checks.redis = 'up';
+    } catch {
+      checks.redis = 'down';
+    }
+  }
+
+  const healthy = checks.database === 'up' && checks.redis !== 'down';
+
+  res.status(healthy ? 200 : 503).json({
+    success: healthy,
+    status: healthy ? 'OK' : 'DEGRADED',
+    checks,
     environment: config.env,
     timestamp: new Date().toISOString(),
   });
 });
 
 /**
- * Rate Limiter
+ * Rate Limiter (global)
  */
-const limiter = rateLimit({
-  windowMs: config.rateLimit.windowMs,
-  max: config.rateLimit.maxRequests,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: {
-    success: false,
-    message: 'Too many requests, please try again later.',
-  },
-});
-
-app.use('/api', limiter);
+app.use('/api', apiLimiter);
 
 /**
  * Swagger

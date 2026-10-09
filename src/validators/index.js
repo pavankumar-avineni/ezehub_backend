@@ -33,6 +33,56 @@ export const changePasswordSchema = z.object({
   }),
 });
 
+// ── Resident authentication ──────────────────────────────────────────
+const phoneSchema = z.string().regex(/^\d{10}$/, 'Phone must be 10 digits');
+
+export const residentSendOtpSchema = z.object({
+  body: z.object({ phone: phoneSchema }),
+});
+
+export const residentVerifyOtpSchema = z.object({
+  body: z.object({
+    phone: phoneSchema,
+    otp: z.string().regex(/^\d{4,6}$/, 'OTP must be 4-6 digits'),
+  }),
+});
+
+export const residentLoginSchema = z.object({
+  body: z.object({
+    phone: phoneSchema,
+    password: z.string().min(6),
+  }),
+});
+
+// ── Resident self-service ────────────────────────────────────────────
+export const residentPayRentSchema = z.object({
+  params: z.object({ chargeId: z.string().uuid() }),
+  body: z.object({
+    transactionId: z.string().min(3, 'Transaction ID is required'),
+    paymentMethod: z.string().optional(),
+    amount: z.coerce.number().positive().optional(),
+    notes: z.string().max(500).optional(),
+  }),
+});
+
+export const residentCreateComplaintSchema = z.object({
+  body: z.object({
+    title: z.string().min(3).max(200),
+    description: z.string().min(3).max(2000),
+    category: z.string().optional(),
+    priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'URGENT']).optional(),
+    buildingId: z.string().uuid().optional(),
+  }),
+});
+
+export const residentCreateVisitorSchema = z.object({
+  body: z.object({
+    name: z.string().min(2).max(100),
+    phone: phoneSchema,
+    purpose: z.string().min(2).max(200),
+  }),
+});
+
 export const createTenantSchema = z.object({
   body: z.object({
     name: z.string().min(2).max(100),

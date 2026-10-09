@@ -52,6 +52,49 @@ export const config = {
     upiId: process.env.PAYMENT_UPI_ID || '',
     gracePeriodDays: parseInt(process.env.GRACE_PERIOD_DAYS || '3', 10),
   },
+
+  redisEnabled: !!process.env.REDIS_HOST || !!process.env.REDIS_URL,
+};
+
+/**
+ * Fail-fast validation of critical configuration.
+ *
+ * In production we refuse to boot with insecure defaults (forgeable JWTs,
+ * a missing database connection). In development we only warn so local
+ * onboarding stays frictionless.
+ */
+const INSECURE_JWT_DEFAULTS = new Set(['access-secret', 'refresh-secret']);
+
+export const validateConfig = () => {
+  const problems = [];
+
+  if (!process.env.DATABASE_URL) {
+    problems.push('DATABASE_URL is not set');
+  }
+
+  if (!process.env.JWT_ACCESS_SECRET || INSECURE_JWT_DEFAULTS.has(config.jwt.accessSecret)) {
+    problems.push('JWT_ACCESS_SECRET is missing or using the insecure default');
+  }
+
+  if (!process.env.JWT_REFRESH_SECRET || INSECURE_JWT_DEFAULTS.has(config.jwt.refreshSecret)) {
+    problems.push('JWT_REFRESH_SECRET is missing or using the insecure default');
+  }
+
+  if (config.jwt.accessSecret === config.jwt.refreshSecret) {
+    problems.push('JWT_ACCESS_SECRET and JWT_REFRESH_SECRET must be different values');
+  }
+
+  if (problems.length === 0) return;
+
+  const message = `Invalid configuration:\n  - ${problems.join('\n  - ')}`;
+
+  if (config.env === 'production') {
+    // Refuse to start with an insecure or incomplete config in production.
+    throw new Error(message);
+  }
+
+  // eslint-disable-next-line no-console
+  console.warn(`[config] WARNING — ${message}\n[config] This will abort startup in production.`);
 };
 
 export default config;

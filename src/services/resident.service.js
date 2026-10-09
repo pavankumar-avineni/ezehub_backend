@@ -4,27 +4,33 @@ import { parsePagination, parseSort, parseSearch } from '../utils/response.js';
 
 class ResidentService {
   async create(tenantId, data) {
+    // Validate bed availability up front so we fail before opening a tx.
+    let bed = null;
     if (data.bedId) {
-      const bed = await prisma.bed.findFirst({
+      bed = await prisma.bed.findFirst({
         where: { id: data.bedId, tenantId, status: 'AVAILABLE', deletedAt: null },
       });
       if (!bed) throw new ConflictError('Bed is not available');
-
-      await prisma.bed.update({ where: { id: data.bedId }, data: { status: 'OCCUPIED' } });
-      await this._updateRoomStatus(bed.roomId);
     }
 
-    const resident = await prisma.resident.create({
-      data: {
-        ...data,
-        tenantId,
-        checkInDate: data.checkInDate ? new Date(data.checkInDate) : new Date(),
-        status: 'ACTIVE',
-      },
-      include: { bed: { include: { room: { include: { floor: { include: { building: true } } } } } } },
-    });
+    // All writes atomic: if the resident create fails, the bed/room status
+    // changes roll back instead of leaving a bed stuck as OCCUPIED.
+    return prisma.$transaction(async (tx) => {
+      if (bed) {
+        await tx.bed.update({ where: { id: bed.id }, data: { status: 'OCCUPIED' } });
+        await this._updateRoomStatus(bed.roomId, tx);
+      }
 
-    return resident;
+      return tx.resident.create({
+        data: {
+          ...data,
+          tenantId,
+          checkInDate: data.checkInDate ? new Date(data.checkInDate) : new Date(),
+          status: 'ACTIVE',
+        },
+        include: { bed: { include: { room: { include: { floor: { include: { building: true } } } } } } },
+      });
+    });
   }
 
   async findAll(tenantId, query) {
@@ -134,8 +140,10 @@ class ResidentService {
   }
 
   async _updateRoomStatus(roomId, tx = prisma) {
-    const beds = await tx.bed.count({ where: { roomId, deletedAt: null } });
-    const occupied = await tx.bed.count({ where: { roomId, status: 'OCCUPIED', deletedAt: null } });
+    const [beds, occupied] = await Promise.all([
+      tx.bed.count({ where: { roomId, deletedAt: null } }),
+      tx.bed.count({ where: { roomId, status: 'OCCUPIED', deletedAt: null } }),
+    ]);
 
     let status = 'AVAILABLE';
     if (occupied === beds && beds > 0) status = 'OCCUPIED';

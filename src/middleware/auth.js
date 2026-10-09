@@ -1,6 +1,12 @@
 import { verifyAccessToken } from '../utils/jwt.js';
 import { UnauthorizedError } from '../utils/errors.js';
 import prisma from '../config/database.js';
+import { cacheGet, cacheSet } from '../utils/cache.js';
+
+// Short TTL: fast enough to cut per-request DB load on hot paths, short
+// enough that a deactivated/suspended account is locked out within seconds.
+const USER_CACHE_TTL = 30;
+const userCacheKey = (scope, id) => `auth:user:${scope}:${id}`;
 
 export const authenticate = async (req, _res, next) => {
   try {
@@ -11,6 +17,12 @@ export const authenticate = async (req, _res, next) => {
 
     const token = authHeader.split(' ')[1];
     const decoded = verifyAccessToken(token);
+
+    const cached = await cacheGet(userCacheKey(decoded.scope || 'TENANT', decoded.userId));
+    if (cached) {
+      req.user = cached;
+      return next();
+    }
 
     if (decoded.scope === 'PLATFORM') {
       const user = await prisma.platformUser.findFirst({
@@ -71,6 +83,9 @@ export const authenticate = async (req, _res, next) => {
         isOnHold: user.tenant.status === 'ON_HOLD',
       };
     }
+
+    // Best-effort cache of the resolved identity (no-op when Redis is off).
+    cacheSet(userCacheKey(req.user.scope, decoded.userId), req.user, USER_CACHE_TTL);
 
     next();
   } catch (error) {

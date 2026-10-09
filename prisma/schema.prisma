@@ -395,6 +395,7 @@ model BillingInvoice {
 
   @@index([tenantId])
   @@index([status])
+  @@index([tenantId, status])
   @@map("billing_invoices")
 }
 
@@ -656,6 +657,8 @@ model Resident {
   @@index([bedId])
   @@index([status])
   @@index([phone])
+  @@index([tenantId, status])
+  @@index([tenantId, deletedAt])
   @@map("residents")
 }
 
@@ -865,6 +868,8 @@ model RentCharge {
   @@unique([residentId, month, year])
   @@index([tenantId])
   @@index([status])
+  @@index([tenantId, status])
+  @@index([tenantId, month, year])
   @@map("rent_charges")
 }
 
@@ -892,6 +897,7 @@ model Payment {
 
   @@index([tenantId])
   @@index([residentId])
+  @@index([tenantId, status])
   @@map("payments")
 }
 
@@ -948,6 +954,8 @@ model Complaint {
 
   @@index([tenantId])
   @@index([status])
+  @@index([tenantId, status])
+  @@index([residentId])
   @@map("complaints")
 }
 
@@ -1023,6 +1031,7 @@ model IncomeRecord {
 
   @@index([tenantId])
   @@index([date])
+  @@index([tenantId, date])
   @@map("income_records")
 }
 
@@ -1043,6 +1052,7 @@ model ExpenseRecord {
 
   @@index([tenantId])
   @@index([date])
+  @@index([tenantId, date])
   @@map("expense_records")
 }
 
@@ -1113,6 +1123,7 @@ model Notification {
   @@index([tenantId])
   @@index([userId])
   @@index([status])
+  @@index([userId, userType])
   @@map("notifications")
 }
 

@@ -4,6 +4,11 @@ import { uploadSingle } from '../middleware/upload.js';
 import { uploadToCloudinary } from '../config/cloudinary.js';
 import prisma from '../config/database.js';
 import { successResponse, paginatedResponse, generateReceiptNumber } from '../utils/response.js';
+import { validate } from '../middleware/validate.js';
+import {
+  residentCreateComplaintSchema,
+  residentCreateVisitorSchema,
+} from '../validators/index.js';
 
 const router = Router();
 
@@ -162,7 +167,7 @@ router.get('/complaints', async (req, res, next) => {
 });
 
 // POST /resident/complaints - Create a complaint
-router.post('/complaints', async (req, res, next) => {
+router.post('/complaints', validate(residentCreateComplaintSchema), async (req, res, next) => {
   try {
     const resident = await prisma.resident.findFirst({
       where: { id: req.user.userId },
@@ -198,7 +203,7 @@ router.get('/visitors', async (req, res, next) => {
 });
 
 // POST /resident/visitors - Pre-register a visitor
-router.post('/visitors', async (req, res, next) => {
+router.post('/visitors', validate(residentCreateVisitorSchema), async (req, res, next) => {
   try {
     const resident = await prisma.resident.findFirst({
       where: { id: req.user.userId },
@@ -325,6 +330,14 @@ router.post('/complaints/:id/comments', async (req, res, next) => {
 // GET /resident/complaints/:id/comments - Get comments for a complaint
 router.get('/complaints/:id/comments', async (req, res, next) => {
   try {
+    // Ownership check first — prevents reading comments on another
+    // resident's complaint via a guessed/leaked complaint id (IDOR).
+    const complaint = await prisma.complaint.findFirst({
+      where: { id: req.params.id, residentId: req.user.userId, tenantId: req.user.tenantId },
+      select: { id: true },
+    });
+    if (!complaint) return res.status(404).json({ success: false, message: 'Complaint not found' });
+
     const comments = await prisma.complaintComment.findMany({
       where: { complaintId: req.params.id },
       orderBy: { createdAt: 'asc' },
