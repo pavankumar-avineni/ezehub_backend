@@ -22,6 +22,18 @@ export const loginSchema = z.object({
   }),
 });
 
+export const signupSchema = z.object({
+  body: z.object({
+    businessName: z.string().min(2, 'Business name must be at least 2 characters').max(100),
+    firstName: z.string().min(1, 'First name is required'),
+    lastName: z.string().min(1, 'Last name is required'),
+    email: z.string().email('Invalid email address'),
+    phone: z.string().regex(/^\d{10}$/, 'Phone must be exactly 10 digits'),
+    password: z.string().min(8, 'Password must be at least 8 characters'),
+    plan: z.enum(['STARTER', 'GROWTH', 'BUSINESS', 'ENTERPRISE']).default('STARTER'),
+  }),
+});
+
 export const refreshTokenSchema = z.object({
   body: z.object({ refreshToken: z.string() }),
 });

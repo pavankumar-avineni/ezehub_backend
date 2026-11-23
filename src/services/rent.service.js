@@ -89,16 +89,16 @@ class RentService {
     if (!charge) throw new NotFoundError('Rent charge');
 
     const totalAmount =
-      (data.rentAmount ?? charge.rentAmount) +
-      (data.electricity ?? charge.electricity) +
-      (data.water ?? charge.water) +
-      (data.wifi ?? charge.wifi) +
-      (data.laundry ?? charge.laundry) +
-      (data.food ?? charge.food) +
-      (data.parking ?? charge.parking) +
-      (data.maintenance ?? charge.maintenance) +
-      (data.lateFee ?? charge.lateFee) -
-      (data.discount ?? charge.discount);
+      Number(data.rentAmount ?? charge.rentAmount) +
+      Number(data.electricity ?? charge.electricity) +
+      Number(data.water ?? charge.water) +
+      Number(data.wifi ?? charge.wifi) +
+      Number(data.laundry ?? charge.laundry) +
+      Number(data.food ?? charge.food) +
+      Number(data.parking ?? charge.parking) +
+      Number(data.maintenance ?? charge.maintenance) +
+      Number(data.lateFee ?? charge.lateFee) -
+      Number(data.discount ?? charge.discount);
 
     return prisma.rentCharge.update({
       where: { id },
@@ -169,11 +169,19 @@ class RentService {
       include: { resident: { select: { firstName: true, lastName: true, phone: true } } },
     });
 
+    const now = new Date();
     const totalOutstanding = charges.reduce(
       (sum, c) => sum + (Number(c.totalAmount) - Number(c.paidAmount)), 0
     );
 
-    return { totalOutstanding, charges };
+    const overdueCharges = charges.filter((c) => new Date(c.dueDate) < now && c.status !== 'PAID');
+    const overdueAmount = overdueCharges.reduce(
+      (sum, c) => sum + (Number(c.totalAmount) - Number(c.paidAmount)), 0
+    );
+
+    const residentsWithDue = new Set(charges.map((c) => c.residentId)).size;
+
+    return { totalOutstanding, overdueAmount, residentsWithDue, charges };
   }
 }
 

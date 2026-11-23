@@ -4,6 +4,7 @@ import { validate } from '../middleware/validate.js';
 import { authLimiter } from '../middleware/rateLimit.js';
 import {
   loginSchema,
+  signupSchema,
   refreshTokenSchema,
   changePasswordSchema,
   residentSendOtpSchema,
@@ -16,6 +17,8 @@ const router = Router();
 
 // Unified login — auto-detects platform vs tenant account (web portal).
 router.post('/login', authLimiter, validate(loginSchema), authController.login);
+// Public tenant self-service signup
+router.post('/signup', authLimiter, validate(signupSchema), authController.signup);
 // Legacy scoped endpoints kept for the mobile apps / backward compatibility.
 router.post('/platform/login', authLimiter, validate(loginSchema), authController.platformLogin);
 router.post('/tenant/login', authLimiter, validate(loginSchema), authController.tenantLogin);

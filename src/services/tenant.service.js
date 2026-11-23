@@ -12,6 +12,7 @@ class TenantService {
     if (existing) throw new ConflictError('Tenant with this email already exists');
 
     const planConfig = SUBSCRIPTION_PLANS[data.plan || 'STARTER'];
+    const passwordHash = await hashPassword(data.adminPassword);
 
     return prisma.$transaction(async (tx) => {
       const tenant = await tx.tenant.create({
@@ -63,21 +64,23 @@ class TenantService {
         data: {
           tenantId: tenant.id,
           email: data.adminEmail,
-          passwordHash: await hashPassword(data.adminPassword),
+          passwordHash,
           firstName: data.adminFirstName,
           lastName: data.adminLastName,
           roleId: adminRole.id,
         },
       });
 
-      for (const bt of BUILDING_TYPES) {
-        await tx.buildingType.create({
-          data: { tenantId: tenant.id, name: bt.name, isSystem: true },
-        });
-      }
+      await tx.buildingType.createMany({
+        data: BUILDING_TYPES.map((bt) => ({
+          tenantId: tenant.id,
+          name: bt.name,
+          isSystem: true,
+        })),
+      });
 
       return tenant;
-    });
+    }, { maxWait: 15000, timeout: 30000 });
   }
 
   async findAll(query) {
@@ -141,12 +144,17 @@ class TenantService {
   }
 
   async getAnalytics() {
-    const [totalTenants, activeTenants, suspendedTenants, planBreakdown] = await Promise.all([
+    const [totalTenants, activeTenants, suspendedTenants, rawPlanBreakdown] = await Promise.all([
       prisma.tenant.count({ where: { deletedAt: null } }),
       prisma.tenant.count({ where: { status: 'ACTIVE', deletedAt: null } }),
       prisma.tenant.count({ where: { status: 'SUSPENDED', deletedAt: null } }),
-      prisma.subscription.groupBy({ by: ['plan'], _count: true }),
+      prisma.subscription.groupBy({ by: ['plan'], _count: { _all: true } }),
     ]);
+
+    const planBreakdown = rawPlanBreakdown.map((p) => ({
+      plan: p.plan,
+      _count: typeof p._count === 'object' && p._count !== null ? (p._count._all ?? 0) : (p._count ?? 0),
+    }));
 
     return { totalTenants, activeTenants, suspendedTenants, planBreakdown };
   }

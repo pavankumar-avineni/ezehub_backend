@@ -1,5 +1,26 @@
 import authService from '../services/auth.service.js';
+import tenantService from '../services/tenant.service.js';
 import { successResponse } from '../utils/response.js';
+
+export const signup = async (req, res, next) => {
+  try {
+    const { businessName, firstName, lastName, email, phone, password, plan } = req.body;
+    await tenantService.create({
+      name: businessName,
+      email,
+      phone,
+      plan: plan || 'STARTER',
+      adminFirstName: firstName,
+      adminLastName: lastName,
+      adminEmail: email,
+      adminPassword: password,
+    });
+
+    // Auto-login newly registered tenant
+    const authResult = await authService.tenantLogin(email, password);
+    successResponse(res, authResult, 'Account registered successfully', 201);
+  } catch (error) { next(error); }
+};
 
 export const login = async (req, res, next) => {
   try {
