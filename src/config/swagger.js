@@ -1,5 +1,244 @@
 import swaggerJsdoc from 'swagger-jsdoc';
 import config from './index.js';
+import logger from '../utils/logger.js';
+import { syncSpecWithRoutes } from './swagger.sync.js';
+
+// ─── Inventory paths (built with helpers to keep the spec readable) ───
+const INV = 'Tenant - Inventory';
+const uuidParam = (name) => ({ name, in: 'path', required: true, schema: { type: 'string', format: 'uuid' } });
+const queryParam = (name, schema = { type: 'string' }, description) => ({ name, in: 'query', schema, ...(description && { description }) });
+const jsonBody = (properties, required = []) => ({
+  required: true,
+  content: { 'application/json': { schema: { type: 'object', required, properties } } },
+});
+const op = (summary, { parameters, requestBody, ok = 200, description = 'Success' } = {}) => ({
+  tags: [INV], summary, ...(parameters && { parameters }), ...(requestBody && { requestBody }),
+  responses: { [ok]: { description } },
+});
+
+const itemFields = {
+  name: { type: 'string' }, category: { type: 'string' },
+  uniqueCode: { type: 'string', description: 'Optional. Auto-generated as CAT-BLDG-0001 when omitted' },
+  serialNumber: { type: 'string' }, brand: { type: 'string' }, model: { type: 'string' },
+  vendor: { type: 'string' }, invoiceNumber: { type: 'string' },
+  purchaseDate: { type: 'string', format: 'date' }, purchasePrice: { type: 'number' },
+  salvageValue: { type: 'number' }, usefulLifeYears: { type: 'integer', description: 'Enables straight-line depreciation' },
+  warrantyUntil: { type: 'string', format: 'date' }, nextServiceDate: { type: 'string', format: 'date' },
+  condition: { type: 'string', enum: ['NEW', 'GOOD', 'FAIR', 'POOR', 'DAMAGED'] },
+  notes: { type: 'string' },
+};
+const createFields = {
+  buildingId: { type: 'string', format: 'uuid' }, roomId: { type: 'string', format: 'uuid', nullable: true },
+  status: { type: 'string', enum: ['IN_USE', 'IN_STORAGE'] }, ...itemFields,
+};
+const id = [uuidParam('id')];
+const page = [queryParam('page'), queryParam('limit')];
+
+const inventoryPaths = {
+  '/tenant/inventory': {
+    get: op('List inventory items', {
+      description: 'Paginated list with valuation',
+      parameters: [
+        ...page, queryParam('search'), queryParam('sortBy'), queryParam('sortOrder', { type: 'string', enum: ['asc', 'desc'] }),
+        queryParam('buildingId'), queryParam('roomId'), queryParam('category'),
+        queryParam('condition', { type: 'string', enum: ['NEW', 'GOOD', 'FAIR', 'POOR', 'DAMAGED', 'DISPOSED'] }),
+        queryParam('status', { type: 'string', enum: ['IN_USE', 'IN_STORAGE', 'UNDER_REPAIR', 'LOST', 'DISPOSED'] }),
+        queryParam('assignedResidentId'), queryParam('unassigned', { type: 'boolean' }),
+        queryParam('warrantyExpiringInDays', { type: 'integer' }), queryParam('warrantyExpired', { type: 'boolean' }),
+        queryParam('serviceDue', { type: 'boolean' }), queryParam('purchasedFrom', { type: 'string', format: 'date' }),
+        queryParam('purchasedTo', { type: 'string', format: 'date' }),
+        queryParam('includeDisposed', { type: 'boolean' }), queryParam('onlyDeleted', { type: 'boolean' }),
+      ],
+    }),
+    post: op('Create inventory item', { requestBody: jsonBody(createFields, ['buildingId', 'name', 'category']), ok: 201, description: 'Item created' }),
+  },
+  '/tenant/inventory/bulk': {
+    post: op('Bulk create inventory items', {
+      requestBody: jsonBody({
+        items: { type: 'array', maxItems: 200, items: { type: 'object', properties: createFields } },
+        template: { type: 'object', properties: createFields },
+        quantity: { type: 'integer', description: 'Used with `template` (max 200). Codes are auto-generated' },
+      }),
+      ok: 201,
+    }),
+  },
+  '/tenant/inventory/bulk-transfer': {
+    post: op('Transfer many items to a room or building', {
+      requestBody: jsonBody({
+        itemIds: { type: 'array', items: { type: 'string', format: 'uuid' } },
+        toBuildingId: { type: 'string', format: 'uuid' }, toRoomId: { type: 'string', format: 'uuid', nullable: true },
+        reason: { type: 'string' },
+      }, ['itemIds']),
+    }),
+  },
+  '/tenant/inventory/summary': { get: op('Dashboard summary: counts, valuation, attention items', { parameters: [queryParam('buildingId')] }) },
+  '/tenant/inventory/alerts': { get: op('Warranty expiry, service due, poor condition, lost items, open repairs', { parameters: [queryParam('buildingId'), queryParam('days', { type: 'integer', default: 30 })] }) },
+  '/tenant/inventory/categories': { get: op('Known and used categories with counts') },
+  '/tenant/inventory/export': { get: op('Export filtered items as CSV (same filters as the list endpoint)', { parameters: [queryParam('buildingId'), queryParam('category'), queryParam('status'), queryParam('condition')] }) },
+  '/tenant/inventory/by-code/{code}': { get: op('Find an item by unique code or scanned QR payload', { parameters: [{ name: 'code', in: 'path', required: true, schema: { type: 'string' } }] }) },
+  '/tenant/inventory/service-logs': {
+    get: op('List repair / service logs', {
+      parameters: [...page, queryParam('status', { type: 'string', enum: ['OPEN', 'COMPLETED', 'CANCELLED'] }), queryParam('type', { type: 'string', enum: ['REPAIR', 'SERVICE', 'INSPECTION'] }), queryParam('buildingId'), queryParam('inventoryItemId')],
+    }),
+  },
+  '/tenant/inventory/service-logs/{logId}/complete': {
+    post: op('Complete a repair / service log', {
+      parameters: [uuidParam('logId')],
+      requestBody: jsonBody({
+        resolution: { type: 'string' }, cost: { type: 'number' }, nextServiceDate: { type: 'string', format: 'date' },
+        condition: { type: 'string', enum: ['NEW', 'GOOD', 'FAIR', 'POOR', 'DAMAGED'] },
+        recordExpense: { type: 'boolean', default: true, description: 'Books the cost as a Maintenance expense' },
+      }),
+    }),
+  },
+  '/tenant/inventory/service-logs/{logId}/cancel': { post: op('Cancel an open repair / service log', { parameters: [uuidParam('logId')] }) },
+  '/tenant/inventory/audits': {
+    get: op('List stock-take audits', { parameters: [...page, queryParam('status'), queryParam('buildingId')] }),
+    post: op('Start an audit (snapshots expected items for a building or room)', {
+      requestBody: jsonBody({ buildingId: { type: 'string', format: 'uuid' }, roomId: { type: 'string', format: 'uuid' }, title: { type: 'string' }, notes: { type: 'string' } }, ['buildingId']),
+      ok: 201,
+    }),
+  },
+  '/tenant/inventory/audits/{id}': { get: op('Audit detail with progress and item results', { parameters: [...id, queryParam('result', { type: 'string', enum: ['PENDING', 'FOUND', 'MISSING', 'UNEXPECTED'] })] }) },
+  '/tenant/inventory/audits/{id}/scan': {
+    post: op('Scan an item (code or QR payload) during an audit', {
+      parameters: id,
+      requestBody: jsonBody({ code: { type: 'string' }, foundRoomId: { type: 'string', format: 'uuid' }, notes: { type: 'string' } }, ['code']),
+    }),
+  },
+  '/tenant/inventory/audits/{id}/complete': {
+    post: op('Complete an audit: unscanned items become MISSING', {
+      parameters: id,
+      requestBody: jsonBody({ markMissingAsLost: { type: 'boolean', default: false }, notes: { type: 'string' } }),
+    }),
+  },
+  '/tenant/inventory/audits/{id}/cancel': { post: op('Cancel an audit', { parameters: id }) },
+  '/tenant/inventory/{id}': {
+    get: op('Get item with attachments, recent service logs, recent history and valuation', { parameters: id }),
+    put: op('Update item details (use transfer / assign / dispose for lifecycle changes)', { parameters: id, requestBody: jsonBody(itemFields) }),
+    delete: op('Soft delete an item entered in error (frees its code)', { parameters: id }),
+  },
+  '/tenant/inventory/{id}/history': { get: op('Paginated audit trail with user, room, building and resident names', { parameters: [...id, ...page] }) },
+  '/tenant/inventory/{id}/qr': { get: op('QR code (PNG, or JSON with data URL)', { parameters: [...id, queryParam('format', { type: 'string', enum: ['png', 'json'] }), queryParam('size', { type: 'integer', default: 300 })] }) },
+  '/tenant/inventory/{id}/transfer': {
+    post: op('Transfer to another room / building / storage', {
+      parameters: id,
+      requestBody: jsonBody({ toBuildingId: { type: 'string', format: 'uuid' }, toRoomId: { type: 'string', format: 'uuid', nullable: true }, reason: { type: 'string' } }),
+    }),
+  },
+  '/tenant/inventory/{id}/status': {
+    post: op('Set status to IN_USE, IN_STORAGE or LOST', {
+      parameters: id, requestBody: jsonBody({ status: { type: 'string', enum: ['IN_USE', 'IN_STORAGE', 'LOST'] }, reason: { type: 'string' } }, ['status']),
+    }),
+  },
+  '/tenant/inventory/{id}/assign': { post: op('Assign to a resident', { parameters: id, requestBody: jsonBody({ residentId: { type: 'string', format: 'uuid' }, notes: { type: 'string' } }, ['residentId']) }) },
+  '/tenant/inventory/{id}/unassign': {
+    post: op('Return from a resident, optionally recording the returned condition', {
+      parameters: id, requestBody: jsonBody({ condition: { type: 'string', enum: ['NEW', 'GOOD', 'FAIR', 'POOR', 'DAMAGED'] }, notes: { type: 'string' } }),
+    }),
+  },
+  '/tenant/inventory/{id}/dispose': { post: op('Retire an item (kept in records)', { parameters: id, requestBody: jsonBody({ reason: { type: 'string' }, disposalValue: { type: 'number' } }, ['reason']) }) },
+  '/tenant/inventory/{id}/restore': { post: op('Restore a deleted or disposed item', { parameters: id }) },
+  '/tenant/inventory/{id}/service-logs': {
+    get: op('Service logs for one item', { parameters: [...id, ...page, queryParam('status'), queryParam('type')] }),
+    post: op('Open a repair / service / inspection (a repair sets the item UNDER_REPAIR)', {
+      parameters: id,
+      requestBody: jsonBody({
+        type: { type: 'string', enum: ['REPAIR', 'SERVICE', 'INSPECTION'], default: 'REPAIR' }, description: { type: 'string' },
+        vendor: { type: 'string' }, cost: { type: 'number' }, nextServiceDate: { type: 'string', format: 'date' },
+      }, ['description']),
+      ok: 201,
+    }),
+  },
+  '/tenant/inventory/{id}/attachments': {
+    post: {
+      tags: [INV], summary: 'Upload a photo, invoice or warranty document (max 20 per item)', parameters: id,
+      requestBody: { required: true, content: { 'multipart/form-data': { schema: { type: 'object', required: ['file'], properties: { file: { type: 'string', format: 'binary' }, kind: { type: 'string', enum: ['IMAGE', 'INVOICE', 'WARRANTY', 'OTHER'] } } } } } },
+      responses: { 201: { description: 'Attachment uploaded' } },
+    },
+  },
+  '/tenant/inventory/{id}/attachments/{attachmentId}': { delete: op('Delete an attachment', { parameters: [...id, uuidParam('attachmentId')] }) },
+};
+
+// ─── Endpoints that were missing from the spec ─────────────────────
+const RZP = 'Payments - Razorpay';
+const rzpVerifyFields = {
+  razorpay_order_id: { type: 'string' },
+  razorpay_payment_id: { type: 'string' },
+  razorpay_signature: { type: 'string', description: 'HMAC-SHA256 of "order_id|payment_id" returned by Razorpay checkout' },
+};
+const uuidPathParam = (name) => ({ name, in: 'path', required: true, schema: { type: 'string', format: 'uuid' } });
+const orderResponse = (extra = {}) => ({
+  200: {
+    description: 'Razorpay order',
+    content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, message: { type: 'string' }, data: { type: 'object', properties: { orderId: { type: 'string' }, amount: { type: 'integer', description: 'Amount in paise' }, currency: { type: 'string' }, keyId: { type: 'string' }, ...extra } } } } } },
+  },
+});
+
+const extraPaths = {
+  '/auth/login': {
+    post: {
+      tags: ['Auth'],
+      summary: 'Unified login (web portal)',
+      description: 'Detects whether the email belongs to a platform admin or a tenant user. Pass `scope` to force one. Rate limited.',
+      security: [],
+      requestBody: { required: true, content: { 'application/json': { schema: { $ref: '#/components/schemas/LoginRequest' } } } },
+      responses: {
+        200: { description: 'Login successful', content: { 'application/json': { schema: { $ref: '#/components/schemas/TokenResponse' } } } },
+        401: { description: 'Invalid credentials' },
+        429: { description: 'Too many attempts' },
+      },
+    },
+  },
+  '/tenant/menu/{id}': {
+    delete: {
+      tags: ['Tenant - Food Menu'],
+      summary: 'Delete a menu entry',
+      parameters: [uuidPathParam('id')],
+      responses: { 200: { description: 'Menu deleted' }, 404: { description: 'Menu not found' } },
+    },
+  },
+  '/payment/subscription/create-order': {
+    post: {
+      tags: [RZP],
+      summary: 'Create a Razorpay order for a subscription invoice (tenant pays platform)',
+      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['invoiceId'], properties: { invoiceId: { type: 'string', format: 'uuid' } } } } } },
+      responses: { ...orderResponse({ invoiceNumber: { type: 'string' } }), 403: { description: 'Platform Razorpay not configured' }, 404: { description: 'Pending invoice not found' } },
+    },
+  },
+  '/payment/subscription/verify': {
+    post: {
+      tags: [RZP],
+      summary: 'Verify a subscription payment signature and mark the invoice paid',
+      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['razorpay_order_id', 'razorpay_payment_id', 'razorpay_signature', 'invoiceId'], properties: { ...rzpVerifyFields, invoiceId: { type: 'string', format: 'uuid' } } } } } },
+      responses: { 200: { description: 'Payment verified, subscription extended' }, 403: { description: 'Signature verification failed' } },
+    },
+  },
+  '/payment/rent/create-order': {
+    post: {
+      tags: [RZP],
+      summary: 'Create a Razorpay order for a rent charge (resident only)',
+      description: 'Uses the tenant\'s own Razorpay keys configured under payment settings.',
+      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['chargeId'], properties: { chargeId: { type: 'string', format: 'uuid' } } } } } },
+      responses: { ...orderResponse({ chargeId: { type: 'string' } }), 403: { description: 'Not a resident, or tenant Razorpay not configured' }, 404: { description: 'Rent charge not found' } },
+    },
+  },
+  '/payment/rent/verify': {
+    post: {
+      tags: [RZP],
+      summary: 'Verify a rent payment signature and record the payment (resident only)',
+      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['razorpay_order_id', 'razorpay_payment_id', 'razorpay_signature', 'chargeId'], properties: { ...rzpVerifyFields, chargeId: { type: 'string', format: 'uuid' } } } } } },
+      responses: { 200: { description: 'Rent payment recorded' }, 403: { description: 'Signature verification failed, or not a resident' } },
+    },
+  },
+  '/payment/rent/key': {
+    get: {
+      tags: [RZP],
+      summary: 'Get the tenant\'s public Razorpay key id for checkout (resident only)',
+      responses: { 200: { description: 'Key id', content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, data: { type: 'object', properties: { keyId: { type: 'string' } } } } } } } }, 403: { description: 'Not a resident' } },
+    },
+  },
+};
 
 const options = {
   definition: {
@@ -25,7 +264,8 @@ const options = {
       { name: 'Tenant - Beds', description: 'Bed management within rooms' },
       { name: 'Tenant - Residents', description: 'Resident check-in, transfer, checkout' },
       { name: 'Tenant - Staff', description: 'Staff, attendance & leave management' },
-      { name: 'Tenant - Inventory', description: 'Inventory item tracking' },
+      { name: 'Tenant - Inventory', description: 'Asset register: lifecycle, QR, repairs, audits, valuation, export' },
+      { name: 'Payments - Razorpay', description: 'Online payments: subscription invoices (tenant → platform) and rent (resident → tenant)' },
       { name: 'Tenant - Rent', description: 'Rent generation & charge management' },
       { name: 'Tenant - Payments', description: 'Payment recording, proof confirmation/rejection' },
       { name: 'Tenant - Payment Settings', description: 'Configure UPI/QR/Bank details for residents' },
@@ -147,6 +387,9 @@ const options = {
             paymentIfscCode: { type: 'string' },
             paymentAccountHolder: { type: 'string' },
             paymentInstructions: { type: 'string' },
+            razorpayKeyId: { type: 'string', description: 'Tenant\'s own Razorpay key id, used for resident online rent payments' },
+            razorpayKeySecret: { type: 'string', description: 'Write-only. Responses return a masked value; sending the mask back keeps the stored secret' },
+            razorpayConfigured: { type: 'boolean', readOnly: true, description: 'Returned by GET only' },
           },
         },
         RentCharge: {
@@ -609,15 +852,8 @@ const options = {
       // ═══════════════════════════════════════════════════════════
       // TENANT - INVENTORY
       // ═══════════════════════════════════════════════════════════
-      '/tenant/inventory': {
-        get: { tags: ['Tenant - Inventory'], summary: 'List inventory items', parameters: [{ name: 'buildingId', in: 'query', schema: { type: 'string' } }], responses: { 200: { description: 'Inventory list' } } },
-        post: { tags: ['Tenant - Inventory'], summary: 'Create inventory item', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['buildingId', 'name', 'category', 'quantity'], properties: { buildingId: { type: 'string' }, roomId: { type: 'string' }, name: { type: 'string' }, category: { type: 'string' }, quantity: { type: 'integer' }, purchasePrice: { type: 'number' }, purchaseDate: { type: 'string', format: 'date' } } } } } }, responses: { 201: { description: 'Item created' } } },
-      },
-      '/tenant/inventory/{id}': {
-        get: { tags: ['Tenant - Inventory'], summary: 'Get inventory item', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { 200: { description: 'Item details' } } },
-        put: { tags: ['Tenant - Inventory'], summary: 'Update inventory item', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { 200: { description: 'Item updated' } } },
-        delete: { tags: ['Tenant - Inventory'], summary: 'Delete inventory item', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { 200: { description: 'Item deleted' } } },
-      },
+      ...inventoryPaths,
+      ...extraPaths,
 
       // ═══════════════════════════════════════════════════════════
       // TENANT - RENT & PAYMENTS
@@ -650,7 +886,7 @@ const options = {
           tags: ['Tenant - Rent'],
           summary: 'Update rent charge (add utilities, late fee, discount)',
           parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
-          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { electricity: { type: 'number' }, water: { type: 'number' }, wifi: { type: 'number' }, laundry: { type: 'number' }, food: { type: 'number' }, parking: { type: 'number' }, maintenance: { type: 'number' }, lateFee: { type: 'number' }, discount: { type: 'number' } } } } } },
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { rentAmount: { type: 'number' }, electricity: { type: 'number' }, water: { type: 'number' }, wifi: { type: 'number' }, laundry: { type: 'number' }, food: { type: 'number' }, parking: { type: 'number' }, maintenance: { type: 'number' }, lateFee: { type: 'number' }, discount: { type: 'number' } } } } } },
           responses: { 200: { description: 'Charge updated with recalculated total' } },
         },
       },
@@ -750,7 +986,7 @@ const options = {
         put: { tags: ['Tenant - Complaints'], summary: 'Update complaint status', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['status'], properties: { status: { type: 'string', enum: ['OPEN', 'ASSIGNED', 'IN_PROGRESS', 'RESOLVED', 'CLOSED'] }, resolution: { type: 'string' } } } } } }, responses: { 200: { description: 'Status updated' } } },
       },
       '/tenant/complaints/{id}/comments': {
-        post: { tags: ['Tenant - Complaints'], summary: 'Add comment to complaint', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['content'], properties: { content: { type: 'string' } } } } } }, responses: { 201: { description: 'Comment added' } } },
+        post: { tags: ['Tenant - Complaints'], summary: 'Add comment to complaint', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['comment'], properties: { comment: { type: 'string' }, attachments: { type: 'array', items: { type: 'string' }, description: 'Attachment URLs' } } } } } }, responses: { 201: { description: 'Comment added' } } },
       },
 
       // ═══════════════════════════════════════════════════════════
@@ -807,7 +1043,7 @@ const options = {
         get: { tags: ['Tenant - Documents'], summary: 'List documents', responses: { 200: { description: 'Documents list' } } },
       },
       '/tenant/documents/upload': {
-        post: { tags: ['Tenant - Documents'], summary: 'Upload document', requestBody: { required: true, content: { 'multipart/form-data': { schema: { type: 'object', required: ['file'], properties: { file: { type: 'string', format: 'binary' }, residentId: { type: 'string' }, category: { type: 'string' }, title: { type: 'string' } } } } } }, responses: { 201: { description: 'Document uploaded' } } },
+        post: { tags: ['Tenant - Documents'], summary: 'Upload document', requestBody: { required: true, content: { 'multipart/form-data': { schema: { type: 'object', required: ['file'], properties: { file: { type: 'string', format: 'binary' }, residentId: { type: 'string', format: 'uuid' }, entityType: { type: 'string', description: 'Defaults to "general"' }, entityId: { type: 'string' }, name: { type: 'string', description: 'Defaults to the file name' } } } } } }, responses: { 201: { description: 'Document uploaded' } } },
       },
       '/tenant/documents/{id}': {
         delete: { tags: ['Tenant - Documents'], summary: 'Delete document', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { 200: { description: 'Document deleted' } } },
@@ -1053,4 +1289,12 @@ const options = {
 };
 
 const swaggerSpec = swaggerJsdoc(options);
+
+// Align request bodies / query params with the real validators and report routes
+// that exist in code but have no documentation.
+export const swaggerSyncReport = syncSpecWithRoutes(swaggerSpec);
+if (swaggerSyncReport.undocumented.length) {
+  logger.warn({ routes: swaggerSyncReport.undocumented }, 'Routes missing from Swagger');
+}
+
 export default swaggerSpec;

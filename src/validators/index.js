@@ -228,20 +228,273 @@ export const createStaffSchema = z.object({
     }),
 });
 
+// ─── Inventory ──────────────────────────────────────────────────
+const inventoryCondition = z.enum(['NEW', 'GOOD', 'FAIR', 'POOR', 'DAMAGED', 'DISPOSED']);
+const inventoryStatus = z.enum(['IN_USE', 'IN_STORAGE', 'UNDER_REPAIR', 'LOST', 'DISPOSED']);
+const dateString = z.string().refine((v) => !Number.isNaN(Date.parse(v)), 'Invalid date');
+const trimmed = (max = 255) => z.string().trim().min(1).max(max);
+const uniqueCodeField = z.string().trim().min(1).max(60).transform((v) => v.toUpperCase());
+const csvBool = z.enum(['true', 'false']).transform((v) => v === 'true');
+
+const inventoryItemFields = {
+  buildingId: z.string().uuid(),
+  roomId: z.string().uuid().nullable().optional(),
+  name: trimmed(),
+  category: trimmed(100),
+  uniqueCode: uniqueCodeField.optional(),
+  serialNumber: z.string().trim().max(100).nullable().optional(),
+  brand: z.string().trim().max(100).nullable().optional(),
+  model: z.string().trim().max(100).nullable().optional(),
+  vendor: z.string().trim().max(150).nullable().optional(),
+  invoiceNumber: z.string().trim().max(100).nullable().optional(),
+  purchaseDate: dateString.nullable().optional(),
+  purchasePrice: z.number().min(0).nullable().optional(),
+  salvageValue: z.number().min(0).nullable().optional(),
+  usefulLifeYears: z.number().int().min(1).max(100).nullable().optional(),
+  warrantyUntil: dateString.nullable().optional(),
+  nextServiceDate: dateString.nullable().optional(),
+  condition: inventoryCondition.default('NEW'),
+  status: z.enum(['IN_USE', 'IN_STORAGE']).optional(),
+  notes: z.string().max(2000).nullable().optional(),
+};
+
 export const createInventorySchema = z.object({
+  body: z.object(inventoryItemFields),
+});
+
+export const bulkCreateInventorySchema = z.object({
+  body: z.object({
+    // Either an explicit list or a template repeated `quantity` times.
+    items: z.array(z.object(inventoryItemFields)).min(1).max(200).optional(),
+    template: z.object(inventoryItemFields).optional(),
+    quantity: z.number().int().min(1).max(200).optional(),
+  }).refine((b) => (b.items && !b.template) || (!b.items && b.template && b.quantity), {
+    message: 'Provide either `items`, or `template` together with `quantity`',
+  }),
+});
+
+export const updateInventorySchema = z.object({
+  params: z.object({ id: z.string().uuid() }),
+  body: z.object({
+    ...inventoryItemFields,
+    condition: inventoryCondition.optional(),
+  }).omit({ buildingId: true, roomId: true, status: true }).partial()
+    .refine((b) => Object.keys(b).length > 0, { message: 'No fields to update' }),
+});
+
+export const transferInventorySchema = z.object({
+  params: z.object({ id: z.string().uuid() }),
+  body: z.object({
+    toBuildingId: z.string().uuid().optional(),
+    toRoomId: z.string().uuid().nullable().optional(),
+    reason: z.string().max(500).optional(),
+  }).refine((b) => b.toBuildingId !== undefined || b.toRoomId !== undefined, {
+    message: 'Provide toBuildingId and/or toRoomId',
+  }),
+});
+
+export const bulkTransferInventorySchema = z.object({
+  body: z.object({
+    itemIds: z.array(z.string().uuid()).min(1).max(200),
+    toBuildingId: z.string().uuid().optional(),
+    toRoomId: z.string().uuid().nullable().optional(),
+    reason: z.string().max(500).optional(),
+  }).refine((b) => b.toBuildingId !== undefined || b.toRoomId !== undefined, {
+    message: 'Provide toBuildingId and/or toRoomId',
+  }),
+});
+
+export const setInventoryStatusSchema = z.object({
+  params: z.object({ id: z.string().uuid() }),
+  body: z.object({
+    status: z.enum(['IN_USE', 'IN_STORAGE', 'LOST']),
+    reason: z.string().max(500).optional(),
+  }),
+});
+
+export const assignInventorySchema = z.object({
+  params: z.object({ id: z.string().uuid() }),
+  body: z.object({
+    residentId: z.string().uuid(),
+    notes: z.string().max(500).optional(),
+  }),
+});
+
+export const unassignInventorySchema = z.object({
+  params: z.object({ id: z.string().uuid() }),
+  body: z.object({
+    condition: inventoryCondition.optional(),
+    notes: z.string().max(500).optional(),
+  }).default({}),
+});
+
+export const disposeInventorySchema = z.object({
+  params: z.object({ id: z.string().uuid() }),
+  body: z.object({
+    reason: z.string().trim().min(3).max(500),
+    disposalValue: z.number().min(0).optional(),
+  }),
+});
+
+export const listInventorySchema = z.object({
+  query: z.object({
+    page: z.string().optional(),
+    limit: z.string().optional(),
+    search: z.string().optional(),
+    sortBy: z.string().optional(),
+    sortOrder: z.enum(['asc', 'desc']).optional(),
+    buildingId: z.string().uuid().optional(),
+    roomId: z.string().uuid().optional(),
+    category: z.string().optional(),
+    condition: inventoryCondition.optional(),
+    status: inventoryStatus.optional(),
+    assignedResidentId: z.string().uuid().optional(),
+    unassigned: csvBool.optional(),
+    inStorage: csvBool.optional(),
+    warrantyExpiringInDays: z.coerce.number().int().min(1).max(3650).optional(),
+    warrantyExpired: csvBool.optional(),
+    serviceDue: csvBool.optional(),
+    purchasedFrom: dateString.optional(),
+    purchasedTo: dateString.optional(),
+    includeDisposed: csvBool.optional(),
+    onlyDeleted: csvBool.optional(),
+  }),
+});
+
+export const inventoryHistoryQuerySchema = z.object({
+  params: z.object({ id: z.string().uuid() }),
+  query: z.object({
+    page: z.string().optional(),
+    limit: z.string().optional(),
+  }),
+});
+
+export const inventorySummarySchema = z.object({
+  query: z.object({ buildingId: z.string().uuid().optional() }),
+});
+
+export const inventoryAlertsSchema = z.object({
+  query: z.object({
+    buildingId: z.string().uuid().optional(),
+    days: z.coerce.number().int().min(1).max(365).default(30),
+  }),
+});
+
+export const inventoryCodeParamSchema = z.object({
+  params: z.object({ code: z.string().trim().min(1).max(60) }),
+});
+
+export const inventoryQrQuerySchema = z.object({
+  params: z.object({ id: z.string().uuid() }),
+  query: z.object({
+    format: z.enum(['png', 'json']).default('png'),
+    size: z.coerce.number().int().min(100).max(1000).default(300),
+  }),
+});
+
+export const inventoryAttachmentParamsSchema = z.object({
+  params: z.object({ id: z.string().uuid(), attachmentId: z.string().uuid() }),
+});
+
+export const inventoryAttachmentUploadSchema = z.object({
+  params: z.object({ id: z.string().uuid() }),
+  body: z.object({
+    kind: z.enum(['IMAGE', 'INVOICE', 'WARRANTY', 'OTHER']).default('IMAGE'),
+  }).default({}),
+});
+
+export const createInventoryServiceLogSchema = z.object({
+  params: z.object({ id: z.string().uuid() }),
+  body: z.object({
+    type: z.enum(['REPAIR', 'SERVICE', 'INSPECTION']).default('REPAIR'),
+    description: z.string().trim().min(3).max(1000),
+    vendor: z.string().trim().max(150).optional(),
+    cost: z.number().min(0).optional(),
+    nextServiceDate: dateString.optional(),
+  }),
+});
+
+export const completeInventoryServiceLogSchema = z.object({
+  params: z.object({ logId: z.string().uuid() }),
+  body: z.object({
+    resolution: z.string().max(1000).optional(),
+    cost: z.number().min(0).optional(),
+    nextServiceDate: dateString.optional(),
+    condition: inventoryCondition.optional(),
+    // When a cost is present, book it as a Maintenance expense in finance.
+    recordExpense: z.boolean().default(true),
+  }).default({}),
+});
+
+export const inventoryServiceLogIdSchema = z.object({
+  params: z.object({ logId: z.string().uuid() }),
+});
+
+export const listInventoryServiceLogsSchema = z.object({
+  query: z.object({
+    page: z.string().optional(),
+    limit: z.string().optional(),
+    status: z.enum(['OPEN', 'COMPLETED', 'CANCELLED']).optional(),
+    type: z.enum(['REPAIR', 'SERVICE', 'INSPECTION']).optional(),
+    buildingId: z.string().uuid().optional(),
+    inventoryItemId: z.string().uuid().optional(),
+  }),
+});
+
+export const listItemInventoryServiceLogsSchema = z.object({
+  params: z.object({ id: z.string().uuid() }),
+  query: z.object({
+    page: z.string().optional(),
+    limit: z.string().optional(),
+    status: z.enum(['OPEN', 'COMPLETED', 'CANCELLED']).optional(),
+    type: z.enum(['REPAIR', 'SERVICE', 'INSPECTION']).optional(),
+  }),
+});
+
+export const createInventoryAuditSchema = z.object({
   body: z.object({
     buildingId: z.string().uuid(),
     roomId: z.string().uuid().optional(),
-    name: z.string().min(1),
-    category: z.string().min(1),
-    uniqueCode: z.string().min(1).transform(val => val.toUpperCase()),
-    purchaseDate: z.string().datetime().optional(),
-    purchasePrice: z.number().min(0).optional(),
-    warrantyUntil: z.string().datetime().optional(),
-    condition: z.enum(['NEW', 'GOOD', 'FAIR', 'POOR', 'DAMAGED', 'DISPOSED']).default('NEW'),
-    notes: z.string().optional(),
+    title: z.string().trim().min(1).max(150).optional(),
+    notes: z.string().max(1000).optional(),
   }),
 });
+
+export const listInventoryAuditsSchema = z.object({
+  query: z.object({
+    page: z.string().optional(),
+    limit: z.string().optional(),
+    status: z.enum(['IN_PROGRESS', 'COMPLETED', 'CANCELLED']).optional(),
+    buildingId: z.string().uuid().optional(),
+  }),
+});
+
+export const inventoryAuditDetailSchema = z.object({
+  params: z.object({ id: z.string().uuid() }),
+  query: z.object({
+    result: z.enum(['PENDING', 'FOUND', 'MISSING', 'UNEXPECTED']).optional(),
+  }),
+});
+
+export const scanInventoryAuditSchema = z.object({
+  params: z.object({ id: z.string().uuid() }),
+  body: z.object({
+    // Accepts a raw unique code or the QR payload (EZEHUB:INV:<code>)
+    code: z.string().trim().min(1).max(100),
+    foundRoomId: z.string().uuid().optional(),
+    notes: z.string().max(500).optional(),
+  }),
+});
+
+export const completeInventoryAuditSchema = z.object({
+  params: z.object({ id: z.string().uuid() }),
+  body: z.object({
+    markMissingAsLost: z.boolean().default(false),
+    notes: z.string().max(1000).optional(),
+  }).default({}),
+});
+
+export const inventoryExportSchema = listInventorySchema;
 
 export const createPaymentSchema = z.object({
   body: z.object({

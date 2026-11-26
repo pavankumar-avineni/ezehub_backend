@@ -2,7 +2,6 @@ import buildingService from '../services/building.service.js';
 import { floorService, roomService, bedService } from '../services/structure.service.js';
 import residentService from '../services/resident.service.js';
 import staffService from '../services/staff.service.js';
-import inventoryService from '../services/inventory.service.js';
 import rentService from '../services/rent.service.js';
 import { complaintService, visitorService } from '../services/complaint.service.js';
 import { financeService, maintenanceService } from '../services/finance.service.js';
@@ -211,31 +210,7 @@ export const updateLeaveStatus = wrap(async (req, res) => {
   successResponse(res, leave, 'Leave status updated');
 });
 
-// Inventory
-export const createInventory = wrap(async (req, res) => {
-  const item = await inventoryService.create(req.tenantId, req.body, req.user.id);
-  successResponse(res, item, 'Inventory item created', 201);
-});
-
-export const getInventory = wrap(async (req, res) => {
-  const { items, pagination } = await inventoryService.findAll(req.tenantId, req.query);
-  paginatedResponse(res, items, pagination);
-});
-
-export const getInventoryItem = wrap(async (req, res) => {
-  const item = await inventoryService.findById(req.tenantId, req.params.id);
-  successResponse(res, item);
-});
-
-export const updateInventory = wrap(async (req, res) => {
-  const item = await inventoryService.update(req.tenantId, req.params.id, req.body, req.user.id);
-  successResponse(res, item, 'Inventory updated');
-});
-
-export const deleteInventory = wrap(async (req, res) => {
-  await inventoryService.softDelete(req.tenantId, req.params.id);
-  successResponse(res, null, 'Inventory deleted');
-});
+// Inventory handlers live in inventory.controller.js
 
 // Rent & Payments
 export const generateRent = wrap(async (req, res) => {

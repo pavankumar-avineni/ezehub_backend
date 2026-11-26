@@ -184,13 +184,45 @@
 
 ## Tenant — Inventory
 
-| Method | Endpoint | Permission | Description |
-|--------|----------|------------|-------------|
-| GET | `/tenant/inventory` | inventory:manage | List inventory items |
-| POST | `/tenant/inventory` | inventory:manage | Create inventory item |
-| GET | `/tenant/inventory/:id` | inventory:manage | Get item with history |
-| PUT | `/tenant/inventory/:id` | inventory:manage | Update/transfer item |
-| DELETE | `/tenant/inventory/:id` | inventory:manage | Soft delete item |
+`inventory:manage` is the superset and is accepted on every route. Granular permissions:
+`inventory:read` (R), `inventory:write` (W), `inventory:delete` (D), `inventory:audit` (A).
+Existing roles keep working through `inventory:manage`. New permissions are created when the seed runs.
+
+| Method | Endpoint | Perm | Description |
+|--------|----------|------|-------------|
+| GET | `/tenant/inventory` | R | List. Filters: buildingId, roomId, category, condition, status, assignedResidentId, unassigned, warrantyExpiringInDays, warrantyExpired, serviceDue, purchasedFrom/To, includeDisposed, onlyDeleted, search, sortBy, sortOrder |
+| POST | `/tenant/inventory` | W | Create (code auto-generated if omitted, QR payload set, history written) |
+| POST | `/tenant/inventory/bulk` | W | Bulk create: `items[]` or `template` + `quantity` (max 200, atomic) |
+| POST | `/tenant/inventory/bulk-transfer` | W | Transfer many items to a room/building/storage |
+| GET | `/tenant/inventory/summary` | R | Counts by status/condition/category/building, purchase vs depreciated value, attention counts |
+| GET | `/tenant/inventory/alerts` | R | Warranty expiring, service due, poor condition, lost, open repairs (`days`, `buildingId`) |
+| GET | `/tenant/inventory/categories` | R | Known and used categories with counts |
+| GET | `/tenant/inventory/export` | R | CSV export (same filters as list, max 10,000 rows) |
+| GET | `/tenant/inventory/by-code/:code` | R | Look up by unique code or scanned QR payload |
+| GET | `/tenant/inventory/service-logs` | R | List repair/service logs (status, type, buildingId, inventoryItemId) |
+| POST | `/tenant/inventory/service-logs/:logId/complete` | W | Complete; restores status, updates service dates, books cost as Maintenance expense |
+| POST | `/tenant/inventory/service-logs/:logId/cancel` | W | Cancel an open log |
+| GET | `/tenant/inventory/audits` | R | List stock-take audits |
+| POST | `/tenant/inventory/audits` | A | Start an audit for a building or room |
+| GET | `/tenant/inventory/audits/:id` | R | Audit detail, progress, item results (`result` filter) |
+| POST | `/tenant/inventory/audits/:id/scan` | A | Scan an item by code or QR payload |
+| POST | `/tenant/inventory/audits/:id/complete` | A | Finish: unscanned become MISSING, optional `markMissingAsLost` |
+| POST | `/tenant/inventory/audits/:id/cancel` | A | Cancel |
+| GET | `/tenant/inventory/:id` | R | Item with attachments, recent service logs, recent history, valuation |
+| PUT | `/tenant/inventory/:id` | W | Update item details (whitelisted fields; `null` clears dates) |
+| DELETE | `/tenant/inventory/:id` | D | Soft delete for entries made in error (frees the code) |
+| GET | `/tenant/inventory/:id/history` | R | Paginated audit trail with user, room, building and resident names |
+| GET | `/tenant/inventory/:id/qr` | R | QR code, `format=png` (default) or `json`, `size` |
+| POST | `/tenant/inventory/:id/transfer` | W | Move to another room/building/storage |
+| POST | `/tenant/inventory/:id/status` | W | Set IN_USE, IN_STORAGE or LOST |
+| POST | `/tenant/inventory/:id/assign` | W | Assign to an active resident |
+| POST | `/tenant/inventory/:id/unassign` | W | Return from resident, with returned condition |
+| POST | `/tenant/inventory/:id/dispose` | D | Retire an item (reason required) |
+| POST | `/tenant/inventory/:id/restore` | D | Restore a deleted or disposed item |
+| GET | `/tenant/inventory/:id/service-logs` | R | Service logs for one item |
+| POST | `/tenant/inventory/:id/service-logs` | W | Open a repair/service/inspection. A repair sets UNDER_REPAIR |
+| POST | `/tenant/inventory/:id/attachments` | W | Upload photo/invoice/warranty (multipart `file`, `kind`, max 20) |
+| DELETE | `/tenant/inventory/:id/attachments/:attachmentId` | W | Delete an attachment |
 
 ---
 

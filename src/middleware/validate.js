@@ -1,7 +1,7 @@
 import { ValidationError } from '../utils/errors.js';
 
 export const validate = (schema) => {
-  return (req, _res, next) => {
+  const middleware = (req, _res, next) => {
     try {
       const result = schema.safeParse({
         body: req.body,
@@ -27,4 +27,7 @@ export const validate = (schema) => {
       next(error);
     }
   };
+  // Exposed so the Swagger generator can derive request docs from the real validators.
+  middleware.schema = schema;
+  return middleware;
 };

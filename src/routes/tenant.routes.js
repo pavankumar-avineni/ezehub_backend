@@ -12,7 +12,16 @@ import {
   createNotificationSchema, transferResidentSchema, checkoutResidentSchema,
   assignComplaintSchema, updateComplaintStatusSchema, verifyVisitorOtpSchema,
   attendanceSchema, leaveRequestSchema, generateRentSchema, idParamSchema, paginationSchema,
+  bulkCreateInventorySchema, updateInventorySchema, transferInventorySchema, bulkTransferInventorySchema,
+  setInventoryStatusSchema, assignInventorySchema, unassignInventorySchema, disposeInventorySchema,
+  listInventorySchema, inventoryHistoryQuerySchema, inventorySummarySchema, inventoryAlertsSchema,
+  inventoryCodeParamSchema, inventoryQrQuerySchema, inventoryAttachmentParamsSchema,
+  inventoryAttachmentUploadSchema, createInventoryServiceLogSchema, completeInventoryServiceLogSchema,
+  inventoryServiceLogIdSchema, listInventoryServiceLogsSchema, createInventoryAuditSchema,
+  listInventoryAuditsSchema, inventoryAuditDetailSchema, scanInventoryAuditSchema,
+  completeInventoryAuditSchema, inventoryExportSchema, listItemInventoryServiceLogsSchema,
 } from '../validators/index.js';
+import * as inv from '../controllers/inventory.controller.js';
 
 // Middleware to block write ops for ON_HOLD tenants
 const requireActiveSubscription = (req, res, next) => {
@@ -81,12 +90,52 @@ router.post('/attendance', authorize(PERMISSIONS.ATTENDANCE_MANAGE), validate(at
 router.post('/staff/:id/leave', authorize(PERMISSIONS.LEAVE_MANAGE), validate(leaveRequestSchema), ctrl.createLeaveRequest);
 router.put('/staff/:id/leave/:leaveId', authorize(PERMISSIONS.LEAVE_MANAGE), ctrl.updateLeaveStatus);
 
-// Inventory
-router.get('/inventory', authorize(PERMISSIONS.INVENTORY_MANAGE), validate(paginationSchema), ctrl.getInventory);
-router.post('/inventory', authorize(PERMISSIONS.INVENTORY_MANAGE), validate(createInventorySchema), ctrl.createInventory);
-router.get('/inventory/:id', authorize(PERMISSIONS.INVENTORY_MANAGE), validate(idParamSchema), ctrl.getInventoryItem);
-router.put('/inventory/:id', authorize(PERMISSIONS.INVENTORY_MANAGE), validate(idParamSchema), ctrl.updateInventory);
-router.delete('/inventory/:id', authorize(PERMISSIONS.INVENTORY_MANAGE), validate(idParamSchema), ctrl.deleteInventory);
+// Inventory. `inventory:manage` is accepted everywhere as the superset permission.
+// Static paths are registered before `/inventory/:id` so they are not captured by it.
+const invRead = authorize(PERMISSIONS.INVENTORY_READ, PERMISSIONS.INVENTORY_MANAGE);
+const invWrite = authorize(PERMISSIONS.INVENTORY_WRITE, PERMISSIONS.INVENTORY_MANAGE);
+const invDelete = authorize(PERMISSIONS.INVENTORY_DELETE, PERMISSIONS.INVENTORY_MANAGE);
+const invAudit = authorize(PERMISSIONS.INVENTORY_AUDIT, PERMISSIONS.INVENTORY_MANAGE);
+
+router.get('/inventory/summary', invRead, validate(inventorySummarySchema), inv.getSummary);
+router.get('/inventory/alerts', invRead, validate(inventoryAlertsSchema), inv.getAlerts);
+router.get('/inventory/categories', invRead, inv.getCategories);
+router.get('/inventory/export', invRead, validate(inventoryExportSchema), inv.exportItems);
+router.get('/inventory/by-code/:code', invRead, validate(inventoryCodeParamSchema), inv.getItemByCode);
+router.post('/inventory/bulk', invWrite, validate(bulkCreateInventorySchema), inv.bulkCreateItems);
+router.post('/inventory/bulk-transfer', invWrite, validate(bulkTransferInventorySchema), inv.bulkTransferItems);
+
+// Service / repair logs
+router.get('/inventory/service-logs', invRead, validate(listInventoryServiceLogsSchema), inv.listServiceLogs);
+router.post('/inventory/service-logs/:logId/complete', invWrite, validate(completeInventoryServiceLogSchema), inv.completeServiceLog);
+router.post('/inventory/service-logs/:logId/cancel', invWrite, validate(inventoryServiceLogIdSchema), inv.cancelServiceLog);
+
+// Stock-take audits
+router.get('/inventory/audits', invRead, validate(listInventoryAuditsSchema), inv.listAudits);
+router.post('/inventory/audits', invAudit, validate(createInventoryAuditSchema), inv.createAudit);
+router.get('/inventory/audits/:id', invRead, validate(inventoryAuditDetailSchema), inv.getAudit);
+router.post('/inventory/audits/:id/scan', invAudit, validate(scanInventoryAuditSchema), inv.scanAuditItem);
+router.post('/inventory/audits/:id/complete', invAudit, validate(completeInventoryAuditSchema), inv.completeAudit);
+router.post('/inventory/audits/:id/cancel', invAudit, validate(idParamSchema), inv.cancelAudit);
+
+// Items
+router.get('/inventory', invRead, validate(listInventorySchema), inv.listItems);
+router.post('/inventory', invWrite, validate(createInventorySchema), inv.createItem);
+router.get('/inventory/:id', invRead, validate(idParamSchema), inv.getItem);
+router.put('/inventory/:id', invWrite, validate(updateInventorySchema), inv.updateItem);
+router.delete('/inventory/:id', invDelete, validate(idParamSchema), inv.deleteItem);
+router.get('/inventory/:id/history', invRead, validate(inventoryHistoryQuerySchema), inv.getItemHistory);
+router.get('/inventory/:id/qr', invRead, validate(inventoryQrQuerySchema), inv.getItemQr);
+router.post('/inventory/:id/transfer', invWrite, validate(transferInventorySchema), inv.transferItem);
+router.post('/inventory/:id/status', invWrite, validate(setInventoryStatusSchema), inv.setItemStatus);
+router.post('/inventory/:id/assign', invWrite, validate(assignInventorySchema), inv.assignItem);
+router.post('/inventory/:id/unassign', invWrite, validate(unassignInventorySchema), inv.unassignItem);
+router.post('/inventory/:id/dispose', invDelete, validate(disposeInventorySchema), inv.disposeItem);
+router.post('/inventory/:id/restore', invDelete, validate(idParamSchema), inv.restoreItem);
+router.get('/inventory/:id/service-logs', invRead, validate(listItemInventoryServiceLogsSchema), inv.listItemServiceLogs);
+router.post('/inventory/:id/service-logs', invWrite, validate(createInventoryServiceLogSchema), inv.openServiceLog);
+router.post('/inventory/:id/attachments', invWrite, uploadSingle('file'), validate(inventoryAttachmentUploadSchema), inv.uploadAttachment);
+router.delete('/inventory/:id/attachments/:attachmentId', invWrite, validate(inventoryAttachmentParamsSchema), inv.deleteAttachment);
 
 // Rent & Payments
 router.post('/rent/generate', authorize(PERMISSIONS.RENT_MANAGE), validate(generateRentSchema), ctrl.generateRent);

@@ -12,11 +12,16 @@ router.get('/health', (_req, res) => {
   res.json({ success: true, message: 'EzeHub API is running', timestamp: new Date().toISOString() });
 });
 
-router.use('/auth', authRoutes);
-router.use('/platform/tenants', platformRoutes);
-router.use('/tenant', tenantRoutes);
-router.use('/resident', residentRoutes);
-router.use('/subscription', subscriptionRoutes);
-router.use('/payment', paymentRoutes);
+// Single source of truth for mount points (also read by the Swagger sync).
+export const ROUTE_MOUNTS = [
+  ['/auth', authRoutes],
+  ['/platform/tenants', platformRoutes],
+  ['/tenant', tenantRoutes],
+  ['/resident', residentRoutes],
+  ['/subscription', subscriptionRoutes],
+  ['/payment', paymentRoutes],
+];
+
+ROUTE_MOUNTS.forEach(([path, subRouter]) => router.use(path, subRouter));
 
 export default router;

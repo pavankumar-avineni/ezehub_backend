@@ -60,7 +60,12 @@ export const PERMISSIONS = {
   LEAVE_MANAGE: 'leave:manage',
 
   // Tenant - Inventory
+  // INVENTORY_MANAGE is the superset and is always accepted alongside the granular ones.
   INVENTORY_MANAGE: 'inventory:manage',
+  INVENTORY_READ: 'inventory:read',
+  INVENTORY_WRITE: 'inventory:write',
+  INVENTORY_DELETE: 'inventory:delete',
+  INVENTORY_AUDIT: 'inventory:audit',
 
   // Tenant - Rent & Payments
   RENT_MANAGE: 'rent:manage',
@@ -120,6 +125,9 @@ export const INVENTORY_CATEGORIES = [
   'Fan', 'AC', 'TV', 'Gas Cylinder', 'Bucket', 'Mirror',
   'Curtains', 'Cleaning Equipment', 'Kitchen Equipment',
 ];
+
+export const INVENTORY_CONDITIONS = ['NEW', 'GOOD', 'FAIR', 'POOR', 'DAMAGED', 'DISPOSED'];
+export const INVENTORY_STATUSES = ['IN_USE', 'IN_STORAGE', 'UNDER_REPAIR', 'LOST', 'DISPOSED'];
 
 export const EXPENSE_CATEGORIES = [
   'Rent', 'Utilities', 'Salaries', 'Maintenance', 'Supplies',
