@@ -1,5 +1,6 @@
 import authService from '../services/auth.service.js';
 import tenantService from '../services/tenant.service.js';
+import profileService from '../services/profile.service.js';
 import featureService from '../services/feature.service.js';
 import activityService from '../services/activity.service.js';
 import { successResponse } from '../utils/response.js';
@@ -109,5 +110,41 @@ export const residentSetPassword = async (req, res, next) => {
   try {
     await authService.residentSetPassword(req.user.userId, req.body.password);
     successResponse(res, null, 'Password set successfully');
+  } catch (error) { next(error); }
+};
+
+// --- OWN PROFILE (all user types) -------------------------------
+
+export const getMe = async (req, res, next) => {
+  try {
+    successResponse(res, await profileService.getMe(req.user), 'Profile retrieved');
+  } catch (error) { next(error); }
+};
+
+export const updateMe = async (req, res, next) => {
+  try {
+    const result = await profileService.updateMe(req.user, req.body);
+    if (req.user.scope === 'PLATFORM') {
+      await activityService.log(req, {
+        event: 'employee.profile_updated', entity: 'employee', entityId: req.user.id,
+        summary: `${req.user.firstName} ${req.user.lastName} updated their own profile`,
+        details: { fields: result.changed },
+      });
+    }
+    successResponse(res, await profileService.getMe(req.user), 'Profile updated');
+  } catch (error) { next(error); }
+};
+
+export const uploadMyAvatar = async (req, res, next) => {
+  try {
+    await profileService.setAvatar(req.user, req.file);
+    successResponse(res, await profileService.getMe(req.user), 'Photo updated');
+  } catch (error) { next(error); }
+};
+
+export const removeMyAvatar = async (req, res, next) => {
+  try {
+    await profileService.removeAvatar(req.user);
+    successResponse(res, await profileService.getMe(req.user), 'Photo removed');
   } catch (error) { next(error); }
 };

@@ -2,11 +2,13 @@ import { Router } from 'express';
 import { authenticate } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
 import { authLimiter } from '../middleware/rateLimit.js';
+import { uploadSingle } from '../middleware/upload.js';
 import {
   loginSchema,
   signupSchema,
   refreshTokenSchema,
   changePasswordSchema,
+  updateMyProfileSchema,
   residentSendOtpSchema,
   residentVerifyOtpSchema,
   residentLoginSchema,
@@ -29,6 +31,11 @@ router.post('/resident/set-password', authenticate, authController.residentSetPa
 router.post('/refresh', validate(refreshTokenSchema), authController.refreshToken);
 router.post('/logout', authController.logout);
 router.get('/profile', authenticate, authController.getProfile);
+// Own profile: every signed-in user type (employee, tenant user, resident).
+router.get('/me', authenticate, authController.getMe);
+router.put('/me', authenticate, validate(updateMyProfileSchema), authController.updateMe);
+router.post('/me/avatar', authenticate, uploadSingle('file'), authController.uploadMyAvatar);
+router.delete('/me/avatar', authenticate, authController.removeMyAvatar);
 router.post('/change-password', authenticate, validate(changePasswordSchema), authController.changePassword);
 
 export default router;

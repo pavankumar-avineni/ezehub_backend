@@ -157,8 +157,14 @@ class AuthService {
     const user = await model.findUnique({ where: { id: userId } });
     if (!user) throw new NotFoundError('User');
 
+    if (!user.passwordHash) throw new ValidationError('No password is set for this account yet. Set one first.');
     if (!(await comparePassword(currentPassword, user.passwordHash))) {
-      throw new UnauthorizedError('Current password is incorrect');
+      // 422 (not 401) so the client shows it on the field instead of treating it as an ended session.
+      throw new ValidationError('Current password is incorrect', [{ field: 'currentPassword', message: 'Current password is incorrect' }]);
+    }
+    // Same rule for everyone: the new password has to be different.
+    if (await comparePassword(newPassword, user.passwordHash)) {
+      throw new ValidationError('The new password must be different from the current one');
     }
 
     const data = { passwordHash: await hashPassword(newPassword) };
@@ -166,9 +172,6 @@ class AuthService {
       // Employees need a stronger password and cannot keep the temporary one.
       if (!/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/.test(newPassword)) {
         throw new ValidationError('Password must be at least 8 characters with an uppercase letter, a lowercase letter and a number');
-      }
-      if (await comparePassword(newPassword, user.passwordHash)) {
-        throw new ValidationError('The new password must be different from the current one');
       }
       data.mustChangePassword = false;
       data.passwordChangedAt = new Date();

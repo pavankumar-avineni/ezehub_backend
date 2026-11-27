@@ -968,3 +968,31 @@ export const generateRentSchema = z.object({
     buildingId: z.string().uuid().optional(),
   }),
 });
+
+// -- Own profile (every kind of user) -------------------------------
+const optionalDigits = (n, label) => z.string().trim().regex(new RegExp(`^\\d{${n}}$`), `${label} must be ${n} digits`).or(z.literal(''));
+export const updateMyProfileSchema = z.object({
+  body: z.object({
+    firstName: z.string().trim().min(1).max(60).optional(),
+    lastName: z.string().trim().min(1).max(60).optional(),
+    phone: optionalDigits(10, 'Phone').optional(),
+    personalEmail: z.string().trim().email().or(z.literal('')).optional(),
+    personalPhone: optionalDigits(10, 'Personal phone').optional(),
+    alternatePhone: optionalDigits(10, 'Alternate phone').optional(),
+    email: z.string().trim().email().or(z.literal('')).optional(),
+    address: z.string().trim().max(300).optional(),
+    city: z.string().trim().max(80).optional(),
+    state: z.string().trim().max(80).optional(),
+    pincode: optionalDigits(6, 'Pincode').optional(),
+    occupation: z.string().trim().max(120).optional(),
+    company: z.string().trim().max(120).optional(),
+    college: z.string().trim().max(120).optional(),
+    bloodGroup: z.string().trim().or(z.literal('')).optional(),
+    foodPreference: z.string().trim().or(z.literal('')).optional(),
+    emergencyContact: z.object({
+      name: z.string().trim().max(80).optional(),
+      relation: z.string().trim().max(40).optional(),
+      phone: optionalDigits(10, 'Emergency phone').optional(),
+    }).nullable().optional(),
+  }),
+});
