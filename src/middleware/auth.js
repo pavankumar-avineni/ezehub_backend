@@ -2,6 +2,15 @@ import { verifyAccessToken } from '../utils/jwt.js';
 import { UnauthorizedError } from '../utils/errors.js';
 import prisma from '../config/database.js';
 import { cacheGet, cacheSet } from '../utils/cache.js';
+import { userCacheKey } from '../utils/authCache.js';
+
+/** Access tokens issued before a forced logout are refused (platform employees). */
+const assertSessionStillValid = (user, decoded) => {
+  // Token times are whole seconds, so allow one second so a sign-in right after a reset is not refused.
+  if (user.scope === 'PLATFORM' && user.sessionsValidAfter && decoded.iat * 1000 + 1000 <= new Date(user.sessionsValidAfter).getTime()) {
+    throw new UnauthorizedError('Your session was ended. Please sign in again.');
+  }
+};
 
 /**
  * `req.user.tenant` is returned by /auth/profile and cached in Redis, so it must never carry
@@ -17,8 +26,6 @@ const sanitizeTenant = (tenant) => {
 // Short TTL: fast enough to cut per-request DB load on hot paths, short
 // enough that a deactivated/suspended account is locked out within seconds.
 const USER_CACHE_TTL = 30;
-// v2: entries from before tenant.settings was stripped may still be cached, so the key changed.
-const userCacheKey = (scope, id) => `auth:user:v2:${scope}:${id}`;
 
 export const authenticate = async (req, _res, next) => {
   try {
@@ -32,6 +39,7 @@ export const authenticate = async (req, _res, next) => {
 
     const cached = await cacheGet(userCacheKey(decoded.scope || 'TENANT', decoded.userId));
     if (cached) {
+      assertSessionStillValid(cached, decoded);
       req.user = cached;
       return next();
     }
@@ -41,16 +49,23 @@ export const authenticate = async (req, _res, next) => {
         where: { id: decoded.userId, isActive: true, deletedAt: null },
         include: { role: { include: { permissions: { include: { permission: true } } } } },
       });
-      if (!user) throw new UnauthorizedError('User not found or inactive');
+      if (!user || user.employeeStatus === 'EXITED') throw new UnauthorizedError('User not found or inactive');
       req.user = {
         id: user.id,
         email: user.email,
         firstName: user.firstName,
         lastName: user.lastName,
         scope: 'PLATFORM',
-        role: user.role,
+        employeeCode: user.employeeCode,
+        department: user.department,
+        designation: user.designation,
+        employeeStatus: user.employeeStatus,
+        mustChangePassword: user.mustChangePassword,
+        sessionsValidAfter: user.sessionsValidAfter,
+        role: { id: user.role.id, name: user.role.name, code: user.role.code, isSystem: user.role.isSystem },
         permissions: user.role.permissions.map((rp) => rp.permission.code),
       };
+      assertSessionStillValid(req.user, decoded);
     } else if (decoded.scope === 'RESIDENT') {
       const resident = await prisma.resident.findFirst({
         where: { id: decoded.userId, status: 'ACTIVE', deletedAt: null },

@@ -4,6 +4,7 @@ import logger from './utils/logger.js';
 import prisma from './config/database.js';
 import redis from './config/redis.js';
 import featureService from './services/feature.service.js';
+import platformAccessService from './services/platformAccess.service.js';
 
 let server;
 
@@ -17,6 +18,8 @@ const start = async () => {
 
     // Make sure every feature defined in code exists in the database (never overwrites prices).
     await featureService.ensureCatalog();
+    // Make sure the platform permissions and the ready-made employee roles exist (never overwrites edits).
+    await platformAccessService.ensureDefaults();
 
     server = app.listen(config.port, () => {
       const baseUrl =

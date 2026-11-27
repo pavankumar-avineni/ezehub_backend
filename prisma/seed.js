@@ -1,6 +1,7 @@
 import { PrismaClient } from '@prisma/client';
 import { hashPassword } from '../src/utils/password.js';
-import { PERMISSIONS, PLATFORM_ROLES, BUILDING_TYPES, BILLING_DEFAULTS } from '../src/constants/index.js';
+import { PLATFORM_ROLES, BUILDING_TYPES, BILLING_DEFAULTS } from '../src/constants/index.js';
+import platformAccess from '../src/services/platformAccess.service.js';
 import { FEATURES, ADDON_FEATURE_CODES } from '../src/constants/features.js';
 
 const prisma = new PrismaClient();
@@ -8,70 +9,14 @@ const prisma = new PrismaClient();
 async function main() {
   console.log('Seeding database...');
 
-  const permissions = Object.entries(PERMISSIONS).map(([key, code]) => ({
-    name: key.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase()),
-    code,
-    module: code.split(':')[0],
-  }));
+  // Permissions + the ready-made platform roles (Super Admin, Manager, Sales, Support, Finance).
+  // topUp also gives existing ready-made roles any default permission they are missing.
+  await platformAccess.ensureDefaults({ topUp: true });
+  console.log('Platform permissions and roles are ready');
 
-  for (const perm of permissions) {
-    await prisma.permission.upsert({
-      where: { code: perm.code },
-      update: {},
-      create: perm,
-    });
-  }
-  console.log(`Created ${permissions.length} permissions`);
-
-  const allPermissions = await prisma.permission.findMany();
-
-  let superAdminRole = await prisma.role.findFirst({
+  const superAdminRole = await prisma.role.findFirst({
     where: { code: PLATFORM_ROLES.SUPER_ADMIN, tenantId: null },
   });
-
-  if (!superAdminRole) {
-    superAdminRole = await prisma.role.create({
-      data: {
-        name: 'Super Admin',
-        code: PLATFORM_ROLES.SUPER_ADMIN,
-        scope: 'PLATFORM',
-        isSystem: true,
-      },
-    });
-  }
-
-  let supportRole = await prisma.role.findFirst({
-    where: { code: PLATFORM_ROLES.SUPPORT, tenantId: null },
-  });
-
-  if (!supportRole) {
-    supportRole = await prisma.role.create({
-      data: {
-        name: 'Support',
-        code: PLATFORM_ROLES.SUPPORT,
-        scope: 'PLATFORM',
-        isSystem: true,
-      },
-    });
-  }
-
-  const platformPerms = allPermissions.filter((p) => p.code.startsWith('platform:') || p.code.startsWith('tenants:'));
-  for (const perm of platformPerms) {
-    await prisma.rolePermission.upsert({
-      where: { roleId_permissionId: { roleId: superAdminRole.id, permissionId: perm.id } },
-      update: {},
-      create: { roleId: superAdminRole.id, permissionId: perm.id },
-    });
-  }
-
-  const supportPerms = allPermissions.filter((p) => p.code.startsWith('platform:support') || p.code.startsWith('tenants:read'));
-  for (const perm of supportPerms) {
-    await prisma.rolePermission.upsert({
-      where: { roleId_permissionId: { roleId: supportRole.id, permissionId: perm.id } },
-      update: {},
-      create: { roleId: supportRole.id, permissionId: perm.id },
-    });
-  }
 
   await prisma.platformUser.upsert({
     where: { email: 'admin@ezehub.com' },
@@ -81,6 +26,7 @@ async function main() {
       passwordHash: await hashPassword('Admin@123456'),
       firstName: 'Super',
       lastName: 'Admin',
+      employeeCode: 'EMP-0001',
       roleId: superAdminRole.id,
     },
   });

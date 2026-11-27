@@ -1,24 +1,36 @@
 import prisma from '../config/database.js';
 import { hashPassword, comparePassword } from '../utils/password.js';
 import { generateAccessToken, generateRefreshToken, getTokenExpiry } from '../utils/jwt.js';
-import { UnauthorizedError, NotFoundError } from '../utils/errors.js';
+import { UnauthorizedError, NotFoundError, ValidationError } from '../utils/errors.js';
 import featureService from './feature.service.js';
+import activityService from './activity.service.js';
+import { invalidatePlatformUsers } from '../utils/authCache.js';
 
 class AuthService {
-  async platformLogin(email, password) {
+  /**
+   * Employee login. Every attempt is written to the login history. The error message is the same
+   * for every failure so it does not reveal whether an email exists.
+   */
+  async platformLogin(email, password, ctx = {}) {
     const user = await prisma.platformUser.findFirst({
-      where: { email, isActive: true, deletedAt: null },
+      where: { email: { equals: email, mode: 'insensitive' }, deletedAt: null },
       include: { role: { include: { permissions: { include: { permission: true } } } } },
     });
 
-    if (!user || !(await comparePassword(password, user.passwordHash))) {
+    const fail = async (reason) => {
+      await activityService.recordLogin({ userId: user?.id ?? null, email, success: false, reason, ctx });
       throw new UnauthorizedError('Invalid email or password');
-    }
+    };
+
+    if (!user) return fail('UNKNOWN_EMAIL');
+    if (!user.isActive || user.employeeStatus === 'EXITED') return fail('ACCOUNT_DISABLED');
+    if (!(await comparePassword(password, user.passwordHash))) return fail('WRONG_PASSWORD');
 
     await prisma.platformUser.update({
       where: { id: user.id },
       data: { lastLoginAt: new Date() },
     });
+    await activityService.recordLogin({ userId: user.id, email, success: true, ctx });
 
     return this._generateTokens(user, 'PLATFORM');
   }
@@ -30,12 +42,13 @@ class AuthService {
    * A generic error is returned if neither matches so we don't leak which
    * table an email exists in.
    */
-  async login(email, password) {
+  async login(email, password, ctx = {}) {
     const platformUser = await prisma.platformUser.findFirst({
-      where: { email, isActive: true, deletedAt: null },
+      where: { email: { equals: email, mode: 'insensitive' }, deletedAt: null },
+      select: { id: true },
     });
     if (platformUser) {
-      return this.platformLogin(email, password);
+      return this.platformLogin(email, password, ctx);
     }
 
     const tenantUser = await prisma.tenantUser.findFirst({
@@ -86,7 +99,7 @@ class AuthService {
     let user, scope, tenant;
     if (stored.platformUserId) {
       user = await prisma.platformUser.findFirst({
-        where: { id: stored.platformUserId, isActive: true },
+        where: { id: stored.platformUserId, isActive: true, deletedAt: null, employeeStatus: { not: 'EXITED' } },
         include: { role: { include: { permissions: { include: { permission: true } } } } },
       });
       scope = 'PLATFORM';
@@ -148,10 +161,21 @@ class AuthService {
       throw new UnauthorizedError('Current password is incorrect');
     }
 
-    await model.update({
-      where: { id: userId },
-      data: { passwordHash: await hashPassword(newPassword) },
-    });
+    const data = { passwordHash: await hashPassword(newPassword) };
+    if (scope === 'PLATFORM') {
+      // Employees need a stronger password and cannot keep the temporary one.
+      if (!/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/.test(newPassword)) {
+        throw new ValidationError('Password must be at least 8 characters with an uppercase letter, a lowercase letter and a number');
+      }
+      if (await comparePassword(newPassword, user.passwordHash)) {
+        throw new ValidationError('The new password must be different from the current one');
+      }
+      data.mustChangePassword = false;
+      data.passwordChangedAt = new Date();
+    }
+
+    await model.update({ where: { id: userId }, data });
+    if (scope === 'PLATFORM') await invalidatePlatformUsers(userId);
   }
 
   // ─── RESIDENT AUTH ───────────────────────────────────────────
@@ -338,6 +362,12 @@ class AuthService {
         scope,
         role: { id: user.role.id, name: user.role.name, code: user.role.code },
         permissions,
+        ...(scope === 'PLATFORM' && {
+          employeeCode: user.employeeCode,
+          department: user.department,
+          designation: user.designation,
+          mustChangePassword: user.mustChangePassword,
+        }),
         ...(tenant && { tenant: { id: tenant.id, name: tenant.name, status: tenant.status } }),
         ...(enabledFeatures && { enabledFeatures }),
       },

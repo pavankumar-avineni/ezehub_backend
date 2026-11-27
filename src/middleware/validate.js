@@ -19,7 +19,10 @@ export const validate = (schema) => {
 
       const { body, query, params } = result.data;
       if (body) req.body = body;
-      if (query) req.query = query;
+      // Zod strips keys that are not in the schema. List endpoints read filters such as
+      // buildingId, floorId, roomId and status that the shared pagination schema does not list,
+      // so keep the original query keys and let the parsed values win.
+      if (query) req.query = { ...req.query, ...query };
       if (params) req.params = params;
 
       next();

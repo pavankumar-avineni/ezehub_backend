@@ -260,11 +260,117 @@ model PlatformUser {
   updatedAt    DateTime  @updatedAt @map("updated_at")
   deletedAt    DateTime? @map("deleted_at")
 
-  role         Role           @relation(fields: [roleId], references: [id])
-  refreshTokens RefreshToken[]
-  auditLogs    AuditLog[]
+  // ── Employee record (your own team) ──
+  employeeCode       String?          @unique @map("employee_code")
+  personalEmail      String?          @map("personal_email")
+  personalPhone      String?          @map("personal_phone")
+  department         String?
+  designation        String?
+  reportsToId        String?          @map("reports_to_id")
+  joiningDate        DateTime?        @map("joining_date") @db.Date
+  employmentType     EmploymentType   @default(FULL_TIME) @map("employment_type")
+  address            String?
+  city               String?
+  state              String?
+  pincode            String?
+  emergencyContact   Json             @default("{}") @map("emergency_contact")
+  idProofType        String?          @map("id_proof_type")
+  idProofNumber      String?          @map("id_proof_number")
+  employeeStatus     EmployeeStatus   @default(ACTIVE) @map("employee_status")
+  exitDate           DateTime?        @map("exit_date") @db.Date
+  exitReason         String?          @map("exit_reason")
+  notes              String?
+  // ── Security ──
+  mustChangePassword Boolean          @default(false) @map("must_change_password")
+  passwordChangedAt  DateTime?        @map("password_changed_at")
+  /// Access tokens issued before this moment are rejected (force logout).
+  sessionsValidAfter DateTime?        @map("sessions_valid_after")
+  createdById        String?          @map("created_by_id")
 
+  role          Role           @relation(fields: [roleId], references: [id])
+  refreshTokens RefreshToken[]
+  auditLogs     AuditLog[]
+  reportsTo     PlatformUser?  @relation("ReportsTo", fields: [reportsToId], references: [id])
+  directReports PlatformUser[] @relation("ReportsTo")
+  createdTenants Tenant[]      @relation("TenantCreatedBy")
+  managedTenants Tenant[]      @relation("TenantAccountManager")
+  loginHistory  PlatformLoginHistory[]
+
+  @@index([reportsToId])
+  @@index([employeeStatus])
   @@map("platform_users")
+}
+
+enum EmploymentType {
+  FULL_TIME
+  PART_TIME
+  CONTRACT
+  INTERN
+}
+
+enum EmployeeStatus {
+  ACTIVE
+  ON_LEAVE
+  EXITED
+}
+
+/// Every sign-in attempt by a platform employee.
+model PlatformLoginHistory {
+  id             String    @id @default(uuid())
+  platformUserId String?   @map("platform_user_id")
+  email          String
+  success        Boolean
+  failureReason  String?   @map("failure_reason")
+  ipAddress      String?   @map("ip_address")
+  userAgent      String?   @map("user_agent")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  platformUser PlatformUser? @relation(fields: [platformUserId], references: [id])
+
+  @@index([platformUserId, createdAt])
+  @@index([createdAt])
+  @@map("platform_login_history")
+}
+
+/// Who did what on the platform. Names are copied in so the record stays readable if an employee is edited later.
+model PlatformActivityLog {
+  id         String   @id @default(uuid())
+  actorId    String?  @map("actor_id")
+  actorName  String?  @map("actor_name")
+  actorEmail String?  @map("actor_email")
+  event      String
+  entity     String
+  entityId   String?  @map("entity_id")
+  tenantId   String?  @map("tenant_id")
+  summary    String
+  details    Json?
+  ipAddress  String?  @map("ip_address")
+  userAgent  String?  @map("user_agent")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([actorId, createdAt])
+  @@index([tenantId, createdAt])
+  @@index([event])
+  @@index([entity, entityId])
+  @@index([createdAt])
+  @@map("platform_activity_logs")
+}
+
+/// History of which employee maintains which tenant.
+model TenantAssignmentHistory {
+  id           String   @id @default(uuid())
+  tenantId     String   @map("tenant_id")
+  fromUserId   String?  @map("from_user_id")
+  toUserId     String?  @map("to_user_id")
+  reason       String?
+  assignedById String?  @map("assigned_by_id")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId, createdAt])
+  @@index([toUserId])
+  @@map("tenant_assignment_history")
 }
 
 model Role {
@@ -334,10 +440,18 @@ model Tenant {
   settings        Json         @default("{}")
   activatedAt     DateTime?    @map("activated_at")
   suspendedAt     DateTime?    @map("suspended_at")
+  /// Platform employee who onboarded this tenant.
+  createdById     String?      @map("created_by_id")
+  /// Platform employee who currently maintains this tenant.
+  accountManagerId String?     @map("account_manager_id")
+  accountManagerAssignedAt DateTime? @map("account_manager_assigned_at")
   createdAt       DateTime     @default(now()) @map("created_at")
   updatedAt       DateTime     @updatedAt @map("updated_at")
   deletedAt       DateTime?    @map("deleted_at")
 
+  createdBy       PlatformUser? @relation("TenantCreatedBy", fields: [createdById], references: [id])
+  accountManager  PlatformUser? @relation("TenantAccountManager", fields: [accountManagerId], references: [id])
+  assignmentHistory TenantAssignmentHistory[]
   subscription    Subscription?
   users           TenantUser[]
   roles           Role[]
@@ -365,6 +479,8 @@ model Tenant {
   foodMenus       FoodMenu[]
 
   @@index([status])
+  @@index([accountManagerId])
+  @@index([createdById])
   @@map("tenants")
 }
 

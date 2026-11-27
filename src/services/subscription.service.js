@@ -1,6 +1,6 @@
 import prisma from '../config/database.js';
 import config from '../config/index.js';
-import { NotFoundError, ForbiddenError, ValidationError } from '../utils/errors.js';
+import { NotFoundError, ForbiddenError, ValidationError, ConflictError } from '../utils/errors.js';
 import { BILLING_DEFAULTS } from '../constants/index.js';
 import billingService from './billing.service.js';
 import featureService from './feature.service.js';
@@ -55,32 +55,46 @@ class SubscriptionService {
     const dueDate = new Date();
     dueDate.setDate(dueDate.getDate() + 7); // 7 days to pay
 
-    // Generate invoice number: INV-YYYYMMDD-XXXX
-    const count = await prisma.billingInvoice.count({ where: { tenantId } });
-    const invoiceNumber = `INV-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${String(count + 1).padStart(4, '0')}`;
+    // Invoice numbers are unique across ALL tenants: INV-YYYYMMDD-XXXX, counted per day.
+    // Two invoices created at the same moment can pick the same number, so retry on a clash.
+    const dayPrefix = `INV-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-`;
+    const data = {
+      subscriptionId: sub.id,
+      tenantId,
+      bedCount: charge.beds,
+      ratePerBed: charge.ratePerBed,
+      taxPercent: charge.taxPercent,
+      lineItems: charge.lines,
+      amount: charge.amount,
+      tax: charge.tax,
+      total: charge.total,
+      billingStart,
+      billingEnd,
+      dueDate,
+      createdBy,
+      status: 'PENDING',
+    };
 
-    const invoice = await prisma.billingInvoice.create({
-      data: {
-        subscriptionId: sub.id,
-        tenantId,
-        invoiceNumber,
-        bedCount: charge.beds,
-        ratePerBed: charge.ratePerBed,
-        taxPercent: charge.taxPercent,
-        lineItems: charge.lines,
-        amount: charge.amount,
-        tax: charge.tax,
-        total: charge.total,
-        billingStart,
-        billingEnd,
-        dueDate,
-        createdBy,
-        status: 'PENDING',
-      },
-      include: { tenant: { select: { name: true, email: true } } },
-    });
-
-    return invoice;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      // Continue after the highest number already used today (counting would reuse numbers after a delete).
+      const last = await prisma.billingInvoice.findFirst({
+        where: { invoiceNumber: { startsWith: dayPrefix } },
+        orderBy: { invoiceNumber: 'desc' },
+        select: { invoiceNumber: true },
+      });
+      const lastSeq = last ? parseInt(last.invoiceNumber.slice(dayPrefix.length), 10) || 0 : 0;
+      const invoiceNumber = `${dayPrefix}${String(lastSeq + 1 + attempt).padStart(4, '0')}`;
+      try {
+        return await prisma.billingInvoice.create({
+          data: { ...data, invoiceNumber },
+          include: { tenant: { select: { name: true, email: true } } },
+        });
+      } catch (error) {
+        const isNumberClash = error.code === 'P2002' && String(error.meta?.target).includes('invoice_number');
+        if (!isNumberClash || attempt === 4) throw error;
+      }
+    }
+    throw new ConflictError('Could not generate a unique invoice number. Please try again');
   }
 
   // Get all invoices for a tenant

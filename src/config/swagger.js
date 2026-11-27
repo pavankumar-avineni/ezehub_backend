@@ -294,7 +294,7 @@ const tenantPricingSchema = {
   },
 };
 const tenantIdPath = [{ name: 'tenantId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }];
-const superAdminNote = 'Platform super admin only.';
+const superAdminNote = 'Needs the `platform:pricing:manage` permission (Super Admin and Finance by default).';
 
 const FEAT_CODES = FEATURE_CODES;
 const ADDON_CODES = ADDON_FEATURE_CODES;
@@ -502,6 +502,193 @@ const featurePaths = {
   },
 };
 
+// ─── Platform team: employees, roles, ownership, activity ──────────
+const EMP = 'Platform - Employees';
+const ROLES = 'Platform - Roles & Access';
+const AUDIT = 'Platform - Activity & Reports';
+const TEN = 'Platform - Tenants';
+const uuidIdParam = [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }];
+const pageParams = [{ name: 'page', in: 'query', schema: { type: 'integer' } }, { name: 'limit', in: 'query', schema: { type: 'integer' } }];
+const paged = (items, description = 'Paginated list') => ({
+  description,
+  content: { 'application/json': { schema: { type: 'object', properties: {
+    success: { type: 'boolean' }, message: { type: 'string' }, data: { type: 'array', items },
+    meta: { type: 'object', properties: { pagination: { type: 'object', properties: { page: { type: 'integer' }, limit: { type: 'integer' }, total: { type: 'integer' }, totalPages: { type: 'integer' }, hasNext: { type: 'boolean' }, hasPrev: { type: 'boolean' } } } } },
+  } } } },
+});
+const perm = (code, note = '') => `Needs the \`${code}\` permission.${note ? ` ${note}` : ''}`;
+
+const personSchema = {
+  type: 'object',
+  properties: { id: { type: 'string', format: 'uuid' }, name: { type: 'string' }, employeeCode: { type: 'string', example: 'EMP-0007' }, designation: { type: 'string', nullable: true } },
+};
+const employeeSchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'string', format: 'uuid' }, employeeCode: { type: 'string', example: 'EMP-0007' },
+    name: { type: 'string' }, firstName: { type: 'string' }, lastName: { type: 'string' },
+    email: { type: 'string', description: 'Work email, used to sign in' }, phone: { type: 'string', nullable: true },
+    personalEmail: { type: 'string', nullable: true }, personalPhone: { type: 'string', nullable: true },
+    department: { type: 'string', nullable: true }, designation: { type: 'string', nullable: true },
+    reportsTo: { ...personSchema, nullable: true }, joiningDate: { type: 'string', format: 'date', nullable: true },
+    employmentType: { type: 'string', enum: ['FULL_TIME', 'PART_TIME', 'CONTRACT', 'INTERN'] },
+    address: { type: 'string', nullable: true }, city: { type: 'string', nullable: true }, state: { type: 'string', nullable: true }, pincode: { type: 'string', nullable: true },
+    emergencyContact: { type: 'object', properties: { name: { type: 'string' }, relation: { type: 'string' }, phone: { type: 'string' } } },
+    idProofType: { type: 'string', nullable: true }, idProofNumber: { type: 'string', nullable: true, description: 'Masked (last 4 digits) unless you have `platform:employees:manage`' },
+    employeeStatus: { type: 'string', enum: ['ACTIVE', 'ON_LEAVE', 'EXITED'] }, isActive: { type: 'boolean' },
+    exitDate: { type: 'string', format: 'date', nullable: true }, exitReason: { type: 'string', nullable: true },
+    mustChangePassword: { type: 'boolean' }, lastLoginAt: { type: 'string', format: 'date-time', nullable: true },
+    role: { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' }, code: { type: 'string' }, isSystem: { type: 'boolean' } } },
+    tenantsManaged: { type: 'integer' },
+  },
+};
+const employeeDetailSchema = {
+  type: 'object',
+  properties: {
+    ...employeeSchema.properties,
+    permissions: { type: 'array', items: { type: 'string' } },
+    directReports: { type: 'array', items: personSchema },
+    createdBy: { ...personSchema, nullable: true },
+    stats: { type: 'object', properties: { tenantsManaged: { type: 'integer' }, activeTenantsManaged: { type: 'integer' }, tenantsCreated: { type: 'integer' } } },
+  },
+};
+const activityItemSchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'string' }, createdAt: { type: 'string', format: 'date-time' },
+    event: { type: 'string', example: 'billing.rate_changed' }, entity: { type: 'string', example: 'tenant' }, entityId: { type: 'string', nullable: true },
+    summary: { type: 'string', example: 'Ravi Kumar set the rate to ₹15 per bed for "Sunrise PG"' },
+    details: { type: 'object', nullable: true },
+    actor: { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' }, email: { type: 'string' }, employeeCode: { type: 'string', nullable: true }, designation: { type: 'string', nullable: true }, role: { type: 'string', nullable: true } } },
+    tenant: { type: 'object', nullable: true, properties: { id: { type: 'string' }, name: { type: 'string', nullable: true } } },
+    ipAddress: { type: 'string', nullable: true }, userAgent: { type: 'string', nullable: true },
+  },
+};
+const loginItemSchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'string' }, createdAt: { type: 'string', format: 'date-time' }, email: { type: 'string' }, success: { type: 'boolean' },
+    failureReason: { type: 'string', nullable: true, enum: ['UNKNOWN_EMAIL', 'ACCOUNT_DISABLED', 'WRONG_PASSWORD', null] },
+    ipAddress: { type: 'string', nullable: true }, userAgent: { type: 'string', nullable: true },
+    employee: { ...personSchema, nullable: true },
+  },
+};
+const platformRoleSchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'string', format: 'uuid' }, name: { type: 'string' }, code: { type: 'string' }, description: { type: 'string', nullable: true },
+    isSystem: { type: 'boolean', description: 'Ready-made roles cannot be deleted' },
+    isLocked: { type: 'boolean', description: 'true only for Super Admin: it always has every permission' },
+    employeeCount: { type: 'integer' },
+    permissions: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, code: { type: 'string' }, name: { type: 'string' } } } },
+  },
+};
+const tempPasswordResponse = (description) => envelope({ type: 'object', properties: { temporaryPassword: { type: 'string', description: 'Shown only once. Share it securely' }, mustChangePassword: { type: 'boolean' } } }, description);
+
+const teamPaths = {
+  // ── employees ──
+  '/platform/employees': {
+    get: { tags: [EMP], summary: 'Employee directory', description: perm('platform:employees:read'), responses: { 200: paged(employeeSchema, 'Employees') } },
+    post: {
+      tags: [EMP], summary: 'Create an employee',
+      description: `${perm('platform:employees:manage')} Creates the login with a temporary password (generated if you do not send one). The employee must change it on first sign-in; until then every platform API except change-password, profile and logout answers 403 PASSWORD_CHANGE_REQUIRED. You can only assign a role whose permissions you hold yourself, and only a Super Admin can create a Super Admin.`,
+      responses: {
+        201: envelope({ type: 'object', properties: { employee: employeeSchema, temporaryPassword: { type: 'string', description: 'Shown only once' }, mustChangePassword: { type: 'boolean' } } }, 'Employee created'),
+        403: { description: 'Role has permissions you do not hold' }, 409: { description: 'Email already used' },
+      },
+    },
+  },
+  '/platform/employees/org-chart': {
+    get: { tags: [EMP], summary: 'Org chart: employees as a reporting tree', description: perm('platform:employees:read', 'Exited employees are left out.'), responses: { 200: envelope({ type: 'array', items: { type: 'object', properties: { ...personSchema.properties, department: { type: 'string', nullable: true }, role: { type: 'string' }, directReports: { type: 'array', items: { type: 'object' } } } } }, 'Tree of employees') } },
+  },
+  '/platform/employees/{id}': {
+    get: { tags: [EMP], summary: 'Employee profile with permissions, reporting line and tenant counts', description: perm('platform:employees:read'), parameters: uuidIdParam, responses: { 200: envelope(employeeDetailSchema, 'Employee'), 404: { description: 'Not found' } } },
+    put: { tags: [EMP], summary: 'Edit employee details', description: `${perm('platform:employees:manage')} Role, status and password have their own endpoints.`, parameters: uuidIdParam, responses: { 200: envelope(employeeDetailSchema, 'Employee updated'), 409: { description: 'Nothing to change' }, 422: { description: 'Validation failed, or a reporting loop' } } },
+    delete: { tags: [EMP], summary: 'Delete an employee (kept in history)', description: `${perm('platform:employees:manage')} Refused for yourself, the last Super Admin, and employees who still maintain tenants (hand those over first).`, parameters: uuidIdParam, responses: { 200: { description: 'Employee deleted' }, 409: { description: 'Still maintains tenants / last Super Admin / yourself' } } },
+  },
+  '/platform/employees/{id}/role': {
+    put: { tags: [EMP], summary: 'Change an employee\'s role', description: `${perm('platform:employees:manage')} You cannot change your own role, nobody can receive more access than they hold, and the last Super Admin cannot be demoted. The employee is signed out and must log in again.`, parameters: uuidIdParam, responses: { 200: envelope(employeeDetailSchema, 'Role updated'), 403: { description: 'Role has permissions you do not hold' }, 409: { description: 'Own role / same role / last Super Admin' } } },
+  },
+  '/platform/employees/{id}/status': {
+    put: {
+      tags: [EMP], summary: 'Set status: ACTIVE, ON_LEAVE or EXITED',
+      description: `${perm('platform:employees:manage')} EXITED disables the login, ends every session and moves their direct reports up to their manager. If they maintain tenants you must send \`reassignTenantsTo\`, otherwise 409. ON_LEAVE keeps the login active (it is a record only). Setting ACTIVE reactivates an exited employee.`,
+      parameters: uuidIdParam,
+      responses: { 200: envelope({ ...employeeDetailSchema, properties: { ...employeeDetailSchema.properties, tenantsReassigned: { type: 'integer' } } }, 'Status updated'), 409: { description: 'Tenants need a new owner / last Super Admin / own status' } },
+    },
+  },
+  '/platform/employees/{id}/reset-password': {
+    post: { tags: [EMP], summary: 'Reset an employee\'s password', description: `${perm('platform:employees:manage')} Generates a new temporary password (or uses \`password\`), ends all their sessions and forces a change at next sign-in. Not allowed on yourself.`, parameters: uuidIdParam, responses: { 200: tempPasswordResponse('Password reset'), 409: { description: 'Your own account' } } },
+  },
+  '/platform/employees/{id}/revoke-sessions': {
+    post: { tags: [EMP], summary: 'Sign an employee out of every device', description: perm('platform:employees:manage'), parameters: uuidIdParam, responses: { 200: { description: 'All sessions ended' } } },
+  },
+  '/platform/employees/{id}/tenants': {
+    get: { tags: [EMP], summary: 'Tenants this employee maintains or created', description: `${perm('platform:employees:read')} \`relation\` = managed (default), created or all.`, parameters: uuidIdParam, responses: { 200: paged({ type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' }, status: { type: 'string' }, isManager: { type: 'boolean' }, isCreator: { type: 'boolean' }, accountManagerAssignedAt: { type: 'string', format: 'date-time', nullable: true }, subscription: { type: 'object', nullable: true } } }, 'Tenants') } },
+  },
+  '/platform/employees/{id}/activity': {
+    get: { tags: [EMP], summary: 'Everything this employee did', description: perm('platform:audit:read'), parameters: uuidIdParam, responses: { 200: paged(activityItemSchema, 'Activity') } },
+  },
+  '/platform/employees/{id}/logins': {
+    get: { tags: [EMP], summary: 'Sign-in history of one employee', description: perm('platform:audit:read'), parameters: uuidIdParam, responses: { 200: paged(loginItemSchema, 'Logins') } },
+  },
+
+  // ── roles & permissions ──
+  '/platform/permissions': {
+    get: { tags: [ROLES], summary: 'All platform permissions, grouped, for building a role', description: perm('platform:roles:manage'), responses: { 200: envelope({ type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, code: { type: 'string' }, name: { type: 'string' }, group: { type: 'string' }, description: { type: 'string', nullable: true } } } }, 'Permissions') } },
+  },
+  '/platform/roles': {
+    get: { tags: [ROLES], summary: 'List employee roles with permissions and headcount', description: perm('platform:roles:manage', 'Also allowed with `platform:employees:read` so a role can be picked.'), responses: { 200: envelope({ type: 'array', items: platformRoleSchema }, 'Roles') } },
+    post: { tags: [ROLES], summary: 'Create a custom role', description: `${perm('platform:roles:manage')} You can only include permissions you hold yourself.`, responses: { 201: envelope(platformRoleSchema, 'Role created'), 403: { description: 'Includes permissions you do not hold' } } },
+  },
+  '/platform/roles/{id}': {
+    get: { tags: [ROLES], summary: 'One role', description: perm('platform:roles:manage'), parameters: uuidIdParam, responses: { 200: envelope(platformRoleSchema, 'Role') } },
+    put: { tags: [ROLES], summary: 'Rename a role / edit description', description: `${perm('platform:roles:manage')} Super Admin is locked.`, parameters: uuidIdParam, responses: { 200: envelope(platformRoleSchema, 'Role updated'), 409: { description: 'Super Admin cannot be changed' } } },
+    delete: { tags: [ROLES], summary: 'Delete a custom role', description: `${perm('platform:roles:manage')} Ready-made roles, and roles that still have employees, cannot be deleted.`, parameters: uuidIdParam, responses: { 200: { description: 'Role deleted' }, 409: { description: 'Ready-made role, or still assigned to employees' } } },
+  },
+  '/platform/roles/{id}/permissions': {
+    put: { tags: [ROLES], summary: 'Replace the permissions of a role', description: `${perm('platform:roles:manage')} Send the complete list. You can only grant permissions you hold. Employees in the role get the change immediately. Super Admin is locked (always every permission).`, parameters: uuidIdParam, responses: { 200: envelope({ ...platformRoleSchema, properties: { ...platformRoleSchema.properties, added: { type: 'array', items: { type: 'string' } }, removed: { type: 'array', items: { type: 'string' } } } }, 'Permissions updated'), 403: { description: 'Includes permissions you do not hold' }, 409: { description: 'Super Admin is locked' } } },
+  },
+
+  // ── activity, logins, reports ──
+  '/platform/audit-logs': {
+    get: { tags: [AUDIT], summary: 'Activity log: who did what, when, on which tenant', description: `${perm('platform:audit:read')} Employees without "View all tenants" only see their own actions and activity on their own tenants. Filter by actorId, tenantId, entity, entityId, event, date range or text.`, responses: { 200: paged(activityItemSchema, 'Activity log') } },
+  },
+  '/platform/audit-logs/events': {
+    get: { tags: [AUDIT], summary: 'List of event names you can filter the activity log by', description: perm('platform:audit:read'), responses: { 200: envelope({ type: 'array', items: { type: 'string' } }, 'Event names') } },
+  },
+  '/platform/login-history': {
+    get: { tags: [AUDIT], summary: 'Sign-in history of all employees (successful and failed)', description: perm('platform:audit:read'), responses: { 200: paged(loginItemSchema, 'Logins') } },
+  },
+  '/platform/reports/team': {
+    get: {
+      tags: [AUDIT], summary: 'Team performance: tenants created, tenants maintained, expected and collected revenue per employee',
+      description: `${perm('platform:reports:read')} Default period is the last 30 days. Employees without "View all tenants" only get their own row. estimatedMonthlyRecurring is before tax.`,
+      responses: { 200: envelope({ type: 'object', properties: {
+        period: { type: 'object', properties: { from: { type: 'string', format: 'date-time' }, to: { type: 'string', format: 'date-time' } } },
+        rows: { type: 'array', items: { type: 'object', properties: {
+          employee: personSchema, tenantsCreatedInPeriod: { type: 'integer' }, tenantsCreatedTotal: { type: 'integer' }, tenantsManaged: { type: 'integer' },
+          activeTenantsManaged: { type: 'integer' }, trialTenantsManaged: { type: 'integer' }, billableBedsManaged: { type: 'integer' },
+          estimatedMonthlyRecurring: { type: 'number' }, trialPipeline: { type: 'number' }, revenueCollectedFromManagedTenants: { type: 'number' },
+          invoicesGenerated: { type: 'integer' }, paymentsConfirmed: { type: 'integer' }, paymentsConfirmedAmount: { type: 'number' },
+        } } },
+        totals: { type: 'object' },
+      } }, 'Team report') },
+    },
+  },
+
+  // ── tenant ownership ──
+  '/platform/tenants/bulk-assign': {
+    post: { tags: [TEN], summary: 'Give many tenants to one account manager', description: `${perm('platform:tenants:assign')} Also needs "View all tenants". Send \`accountManagerId: null\` to unassign.`, responses: { 200: envelope({ type: 'object', properties: { requested: { type: 'integer' }, changed: { type: 'integer' }, unchanged: { type: 'integer' }, tenants: { type: 'array', items: { type: 'object' } } } }, 'Reassigned') } },
+  },
+  '/platform/tenants/{id}/account-manager': {
+    put: { tags: [TEN], summary: 'Choose which employee maintains a tenant', description: `${perm('platform:tenants:assign')} The employee must be active. Every change is kept in the assignment history. Send \`null\` to leave the tenant unassigned.`, parameters: uuidIdParam, responses: { 200: envelope({ type: 'object', properties: { tenantId: { type: 'string' }, tenantName: { type: 'string' }, from: { ...personSchema, nullable: true }, to: { ...personSchema, nullable: true } } }, 'Account manager updated'), 409: { description: 'Already assigned to this employee' } } },
+  },
+  '/platform/tenants/{id}/assignment-history': {
+    get: { tags: [TEN], summary: 'Who has maintained this tenant over time', description: perm('tenants:read'), parameters: uuidIdParam, responses: { 200: envelope({ type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, createdAt: { type: 'string', format: 'date-time' }, reason: { type: 'string', nullable: true }, from: { ...personSchema, nullable: true }, to: { ...personSchema, nullable: true }, assignedBy: { ...personSchema, nullable: true } } } }, 'History') } },
+  },
+};
+
 const options = {
   definition: {
     openapi: '3.1.0',
@@ -517,6 +704,9 @@ const options = {
     tags: [
       { name: 'Auth', description: 'Authentication — Login, OTP, Token refresh' },
       { name: 'Platform - Tenants', description: 'Platform admin tenant management' },
+      { name: 'Platform - Employees', description: 'Your own team: employee records, org chart, roles, status, password reset, forced logout, and what each employee owns' },
+      { name: 'Platform - Roles & Access', description: 'Roles and permissions for platform employees (ready-made roles + custom roles)' },
+      { name: 'Platform - Activity & Reports', description: 'Who did what (activity log), sign-in history and per-employee performance reports' },
       { name: 'Platform - Billing', description: 'Per-bed rate, free-trial and tax controls, invoicing & payment confirmation' },
       { name: 'Subscription', description: 'Per-bed pricing, feature catalog, free trial and tenant subscription. Add-on features (Staff, Inventory, Maintenance, Complaints, Visitors, Food menu, Finance, Discounts, Online payments, Promotions, Documents, Reports, Resident app) answer 403 with code FEATURE_NOT_ENABLED until the platform enables them for the tenant' },
       { name: 'Tenant - Dashboard', description: 'Tenant dashboard & reports' },
@@ -1114,6 +1304,7 @@ const options = {
       ...extraPaths,
       ...billingPaths,
       ...featurePaths,
+      ...teamPaths,
 
       // ═══════════════════════════════════════════════════════════
       // TENANT - RENT & PAYMENTS

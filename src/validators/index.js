@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ADDON_FEATURE_CODES, FEATURE_CODES } from '../constants/features.js';
+import { EMPLOYMENT_TYPES, EMPLOYEE_STATUSES } from '../constants/platformAccess.js';
 
 export const paginationSchema = z.object({
   query: z.object({
@@ -109,6 +110,8 @@ export const createTenantSchema = z.object({
     trialDays: z.number().int().min(0).max(365).optional(),
     // Add-on feature codes to switch on for this tenant. Leave out to use the platform default set.
     features: z.array(z.enum(ADDON_FEATURE_CODES)).optional(),
+    // Employee who will maintain the tenant. Defaults to the employee creating it.
+    accountManagerId: z.string().uuid().optional(),
     adminFirstName: z.string().min(1),
     adminLastName: z.string().min(1),
     adminEmail: z.string().email(),
@@ -597,6 +600,192 @@ export const updateRolePermissionsSchema = z.object({
   body: z.object({
     // The complete permission list for the role. Send [] to remove every permission.
     permissionIds: z.array(z.string().uuid()).max(200),
+  }),
+});
+
+// ─── Platform team: employees, roles, assignments, activity ─────
+const phone10 = z.string().regex(/^\d{10}$/, 'Phone must be 10 digits');
+const uuid = z.string().uuid();
+const strongPassword = z.string().min(8).max(100).regex(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/, 'Password must contain an uppercase letter, a lowercase letter and a number');
+
+const employeeFields = {
+  firstName: z.string().trim().min(1).max(60),
+  lastName: z.string().trim().min(1).max(60),
+  phone: phone10.nullable().optional(),
+  personalEmail: z.string().email().nullable().optional(),
+  personalPhone: phone10.nullable().optional(),
+  department: z.string().trim().max(100).nullable().optional(),
+  designation: z.string().trim().max(100).nullable().optional(),
+  reportsToId: uuid.nullable().optional(),
+  joiningDate: dateString.nullable().optional(),
+  employmentType: z.enum(EMPLOYMENT_TYPES).optional(),
+  address: z.string().trim().max(300).nullable().optional(),
+  city: z.string().trim().max(100).nullable().optional(),
+  state: z.string().trim().max(100).nullable().optional(),
+  pincode: z.string().regex(/^\d{6}$/, 'Pincode must be 6 digits').nullable().optional(),
+  emergencyContact: z.object({
+    name: z.string().trim().max(100).optional(),
+    relation: z.string().trim().max(50).optional(),
+    phone: phone10.optional(),
+  }).optional(),
+  idProofType: z.string().trim().max(50).nullable().optional(),
+  idProofNumber: z.string().trim().max(50).nullable().optional(),
+  notes: z.string().trim().max(1000).nullable().optional(),
+  avatar: z.string().trim().max(500).nullable().optional(),
+};
+
+export const createEmployeeSchema = z.object({
+  body: z.object({
+    ...employeeFields,
+    email: z.string().trim().email().max(150),
+    roleId: uuid,
+    // Optional. When left out a strong temporary password is generated and returned once.
+    password: strongPassword.optional(),
+  }),
+});
+
+export const updateEmployeeSchema = z.object({
+  params: z.object({ id: uuid }),
+  body: z.object(employeeFields).partial().refine((b) => Object.keys(b).length > 0, { message: 'No fields to update' }),
+});
+
+export const listEmployeesSchema = z.object({
+  query: z.object({
+    page: z.string().optional(),
+    limit: z.string().optional(),
+    search: z.string().optional(),
+    sortBy: z.string().optional(),
+    sortOrder: z.enum(['asc', 'desc']).optional(),
+    status: z.enum(EMPLOYEE_STATUSES).optional(),
+    isActive: z.enum(['true', 'false']).transform((v) => v === 'true').optional(),
+    roleId: uuid.optional(),
+    department: z.string().optional(),
+    reportsToId: uuid.optional(),
+  }),
+});
+
+export const setEmployeeRoleSchema = z.object({
+  params: z.object({ id: uuid }),
+  body: z.object({ roleId: uuid }),
+});
+
+export const setEmployeeStatusSchema = z.object({
+  params: z.object({ id: uuid }),
+  body: z.object({
+    status: z.enum(EMPLOYEE_STATUSES),
+    reason: z.string().trim().max(300).optional(),
+    exitDate: dateString.optional(),
+    // When an employee leaves, the tenants they maintain must go to someone.
+    reassignTenantsTo: uuid.optional(),
+  }),
+});
+
+export const resetEmployeePasswordSchema = z.object({
+  params: z.object({ id: uuid }),
+  body: z.object({ password: strongPassword.optional() }).default({}),
+});
+
+export const employeeTenantsQuerySchema = z.object({
+  params: z.object({ id: uuid }),
+  query: z.object({
+    page: z.string().optional(),
+    limit: z.string().optional(),
+    relation: z.enum(['managed', 'created', 'all']).default('managed'),
+  }),
+});
+
+export const activityQuerySchema = z.object({
+  query: z.object({
+    page: z.string().optional(),
+    limit: z.string().optional(),
+    actorId: uuid.optional(),
+    tenantId: uuid.optional(),
+    entity: z.string().max(50).optional(),
+    entityId: z.string().max(100).optional(),
+    event: z.string().max(80).optional(),
+    from: dateString.optional(),
+    to: dateString.optional(),
+    search: z.string().max(100).optional(),
+  }),
+});
+
+export const employeeActivityQuerySchema = z.object({
+  params: z.object({ id: uuid }),
+  query: activityQuerySchema.shape.query,
+});
+
+export const loginHistoryQuerySchema = z.object({
+  query: z.object({
+    page: z.string().optional(),
+    limit: z.string().optional(),
+    userId: uuid.optional(),
+    success: z.enum(['true', 'false']).transform((v) => v === 'true').optional(),
+    from: dateString.optional(),
+    to: dateString.optional(),
+  }),
+});
+
+export const employeeLoginHistoryQuerySchema = z.object({
+  params: z.object({ id: uuid }),
+  query: loginHistoryQuerySchema.shape.query.omit({ userId: true }),
+});
+
+export const listPlatformTenantsSchema = z.object({
+  query: z.object({
+    page: z.string().optional(),
+    limit: z.string().optional(),
+    search: z.string().optional(),
+    sortBy: z.string().optional(),
+    sortOrder: z.enum(['asc', 'desc']).optional(),
+    status: z.string().optional(),
+    accountManagerId: uuid.optional(),
+    createdById: uuid.optional(),
+    unassigned: z.enum(['true', 'false']).transform((v) => v === 'true').optional(),
+  }),
+});
+
+export const assignAccountManagerSchema = z.object({
+  params: z.object({ id: uuid }),
+  body: z.object({
+    // null = leave the tenant without an account manager
+    accountManagerId: uuid.nullable(),
+    reason: z.string().trim().max(300).optional(),
+  }),
+});
+
+export const bulkAssignTenantsSchema = z.object({
+  body: z.object({
+    tenantIds: z.array(uuid).min(1).max(200),
+    accountManagerId: uuid.nullable(),
+    reason: z.string().trim().max(300).optional(),
+  }),
+});
+
+export const createPlatformRoleSchema = z.object({
+  body: z.object({
+    name: z.string().trim().min(2).max(100),
+    description: z.string().trim().max(300).optional(),
+    permissionIds: z.array(uuid).max(100).optional(),
+  }),
+});
+
+export const updatePlatformRoleSchema = z.object({
+  params: z.object({ id: uuid }),
+  body: z.object({
+    name: z.string().trim().min(2).max(100).optional(),
+    description: z.string().trim().max(300).optional(),
+  }).refine((b) => b.name !== undefined || b.description !== undefined, { message: 'Provide name or description' }),
+});
+
+export const setPlatformRolePermissionsSchema = z.object({
+  params: z.object({ id: uuid }),
+  body: z.object({ permissionIds: z.array(uuid).max(100) }),
+});
+
+export const teamReportQuerySchema = z.object({
+  query: z.object({
+    from: dateString.optional(),
+    to: dateString.optional(),
   }),
 });
 

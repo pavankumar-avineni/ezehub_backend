@@ -12,7 +12,10 @@ export const BILLING_DEFAULTS = {
 
 export const PLATFORM_ROLES = {
   SUPER_ADMIN: 'platform-super-admin',
+  MANAGER: 'platform-manager',
+  SALES: 'platform-sales',
   SUPPORT: 'platform-support',
+  FINANCE: 'platform-finance',
 };
 
 export const TENANT_ROLES = {
@@ -38,6 +41,19 @@ export const PERMISSIONS = {
   DEVICES_MANAGE: 'devices:manage',
   PLATFORM_ANALYTICS: 'platform:analytics',
   PLATFORM_SUPPORT: 'platform:support',
+
+  // Platform - your own team (employees), access and oversight. All start with `platform:`
+  // so they can never be granted to a tenant role.
+  PLATFORM_EMPLOYEES_READ: 'platform:employees:read',
+  PLATFORM_EMPLOYEES_MANAGE: 'platform:employees:manage',
+  PLATFORM_ROLES_MANAGE: 'platform:roles:manage',
+  PLATFORM_AUDIT_READ: 'platform:audit:read',
+  PLATFORM_REPORTS_READ: 'platform:reports:read',
+  PLATFORM_TENANTS_VIEW_ALL: 'platform:tenants:view_all',
+  PLATFORM_TENANTS_ASSIGN: 'platform:tenants:assign',
+  PLATFORM_BILLING_READ: 'platform:billing:read',
+  PLATFORM_BILLING_MANAGE: 'platform:billing:manage',
+  PLATFORM_PRICING_MANAGE: 'platform:pricing:manage',
 
   // Tenant - Buildings
   BUILDINGS_CREATE: 'buildings:create',

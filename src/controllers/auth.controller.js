@@ -1,7 +1,10 @@
 import authService from '../services/auth.service.js';
 import tenantService from '../services/tenant.service.js';
 import featureService from '../services/feature.service.js';
+import activityService from '../services/activity.service.js';
 import { successResponse } from '../utils/response.js';
+
+const requestContext = (req) => ({ ip: req.ip, userAgent: req.headers['user-agent'] });
 
 export const signup = async (req, res, next) => {
   try {
@@ -25,14 +28,14 @@ export const signup = async (req, res, next) => {
 
 export const login = async (req, res, next) => {
   try {
-    const result = await authService.login(req.body.email, req.body.password);
+    const result = await authService.login(req.body.email, req.body.password, requestContext(req));
     successResponse(res, result, 'Login successful');
   } catch (error) { next(error); }
 };
 
 export const platformLogin = async (req, res, next) => {
   try {
-    const result = await authService.platformLogin(req.body.email, req.body.password);
+    const result = await authService.platformLogin(req.body.email, req.body.password, requestContext(req));
     successResponse(res, result, 'Login successful');
   } catch (error) { next(error); }
 };
@@ -61,6 +64,12 @@ export const logout = async (req, res, next) => {
 export const changePassword = async (req, res, next) => {
   try {
     await authService.changePassword(req.user.id, req.user.scope, req.body.currentPassword, req.body.newPassword);
+    if (req.user.scope === 'PLATFORM') {
+      await activityService.log(req, {
+        event: 'employee.password_changed', entity: 'employee', entityId: req.user.id,
+        summary: `${req.user.firstName} ${req.user.lastName} changed their own password`,
+      });
+    }
     successResponse(res, null, 'Password changed successfully');
   } catch (error) { next(error); }
 };

@@ -43,18 +43,74 @@
 
 ## Platform — Tenants
 
-> Requires: Platform scope + respective permissions
+> Requires: Platform scope + respective permissions.
+> Employees without `platform:tenants:view_all` only reach tenants they **created** or **maintain**. Other tenants answer 404.
 
 | Method | Endpoint | Permission | Description |
 |--------|----------|------------|-------------|
-| GET | `/platform/tenants/analytics` | platform:analytics | Platform analytics dashboard |
-| GET | `/platform/tenants` | tenants:read | List all tenants (paginated) |
-| POST | `/platform/tenants` | tenants:create | Create new tenant |
-| GET | `/platform/tenants/:id` | tenants:read | Get tenant details |
-| PUT | `/platform/tenants/:id` | tenants:update | Update tenant |
+| GET | `/platform/tenants/analytics` | platform:analytics + view_all | Platform analytics dashboard |
+| GET | `/platform/tenants` | tenants:read | List tenants (filters: `accountManagerId`, `createdById`, `unassigned`, `status`, `search`) |
+| POST | `/platform/tenants` | tenants:create | Create tenant. `ratePerBed` / `trialDays` also need `platform:pricing:manage`; another `accountManagerId` needs `platform:tenants:assign` |
+| GET | `/platform/tenants/:id` | tenants:read | Tenant details with `createdBy`, `accountManager` and billing |
+| PUT | `/platform/tenants/:id` | tenants:update | Update tenant (`settings` also needs `platform:billing:manage`) |
+| PUT | `/platform/tenants/:id/account-manager` | platform:tenants:assign | Choose who maintains the tenant (`null` = unassigned) |
+| GET | `/platform/tenants/:id/assignment-history` | tenants:read | Who maintained the tenant over time |
+| POST | `/platform/tenants/bulk-assign` | platform:tenants:assign + view_all | Give many tenants to one employee |
 | POST | `/platform/tenants/:id/suspend` | tenants:suspend | Suspend tenant |
 | POST | `/platform/tenants/:id/activate` | tenants:activate | Activate tenant |
 | DELETE | `/platform/tenants/:id` | tenants:delete | Soft delete tenant |
+
+---
+
+## Platform — Your team (employees, roles, activity)
+
+Employees are platform users with a full record. Access is permission based. Five ready-made roles exist (Super Admin, Manager,
+Sales / Onboarding, Support, Finance) and you can create custom roles. Super Admin always holds every permission.
+
+| Permission | Allows |
+|---|---|
+| `platform:employees:read` | Employee directory, profiles, org chart, the tenants an employee owns |
+| `platform:employees:manage` | Create, edit, change status, reset password, end sessions, delete employees. Sees full ID numbers |
+| `platform:roles:manage` | Create roles and choose their permissions |
+| `platform:audit:read` | Activity log and sign-in history |
+| `platform:reports:read` | Team performance report |
+| `platform:tenants:view_all` | See every tenant (otherwise only tenants you created or maintain) |
+| `platform:tenants:assign` | Choose account managers |
+| `platform:billing:read` / `platform:billing:manage` | View billing / generate invoices, confirm or reject payments, hold tenants |
+| `platform:pricing:manage` | Rates, trials, tax, feature prices, tenant features |
+
+Rules: nobody can grant a permission they do not hold; only a Super Admin can create or change a Super Admin; nobody can change
+their own role, status or password reset; the last active Super Admin is protected.
+
+| Method | Endpoint | Permission | Description |
+|--------|----------|------------|-------------|
+| GET | `/platform/employees` | employees:read | Directory (filters: `search`, `status`, `roleId`, `department`, `reportsToId`, `isActive`) |
+| GET | `/platform/employees/org-chart` | employees:read | Reporting tree |
+| POST | `/platform/employees` | employees:manage | Create employee. Returns a one-time `temporaryPassword`; the employee must change it on first sign-in |
+| GET | `/platform/employees/:id` | employees:read | Profile, permissions, reporting line, tenant counts |
+| PUT | `/platform/employees/:id` | employees:manage | Edit details |
+| PUT | `/platform/employees/:id/role` | employees:manage | Change role (employee is signed out) |
+| PUT | `/platform/employees/:id/status` | employees:manage | ACTIVE / ON_LEAVE / EXITED (EXITED needs `reassignTenantsTo` if they maintain tenants) |
+| POST | `/platform/employees/:id/reset-password` | employees:manage | New temporary password, ends all sessions |
+| POST | `/platform/employees/:id/revoke-sessions` | employees:manage | Sign out of every device |
+| DELETE | `/platform/employees/:id` | employees:manage | Delete (kept in history) |
+| GET | `/platform/employees/:id/tenants` | employees:read | Tenants maintained / created (`relation=managed|created|all`) |
+| GET | `/platform/employees/:id/activity` | audit:read | What this employee did |
+| GET | `/platform/employees/:id/logins` | audit:read | Their sign-in history |
+| GET | `/platform/permissions` | roles:manage | All platform permissions, grouped |
+| GET | `/platform/roles` | roles:manage or employees:read | Roles with permissions and headcount |
+| GET | `/platform/roles/:id` | roles:manage or employees:read | One role |
+| POST | `/platform/roles` | roles:manage | Create custom role |
+| PUT | `/platform/roles/:id` | roles:manage | Rename / describe |
+| PUT | `/platform/roles/:id/permissions` | roles:manage | Replace permissions (applies immediately) |
+| DELETE | `/platform/roles/:id` | roles:manage | Delete custom role (not in use) |
+| GET | `/platform/audit-logs` | audit:read | Who did what (filters: `actorId`, `tenantId`, `entity`, `event`, `from`, `to`, `search`) |
+| GET | `/platform/audit-logs/events` | audit:read | Event names for filtering |
+| GET | `/platform/login-history` | audit:read | All employee sign-ins, successful and failed |
+| GET | `/platform/reports/team` | reports:read | Per employee: tenants created / maintained, expected and collected revenue |
+
+Sign-in: `POST /auth/login` returns `user.mustChangePassword`. While it is true every platform API answers
+`403` with `errors: [{ "code": "PASSWORD_CHANGE_REQUIRED" }]`; only `POST /auth/change-password`, `GET /auth/profile`, `POST /auth/logout` and refresh work.
 
 ### POST /platform/tenants
 ```json
@@ -373,19 +429,19 @@ Fields: file, residentId, entityType, entityId, name
 | GET | `/subscription/pricing` | No | Rate per bed + free-trial days (public, for pricing/sign-up pages) |
 | GET | `/subscription/payment-config` | No | Get platform payment QR/UPI config |
 | GET | `/subscription/admin/settings` | Platform | View default rate per bed, trial days, tax % |
-| PUT | `/subscription/admin/settings` | Super admin | Change the defaults (new tenants / new invoices only). `applyToExistingTenants` re-prices tenants on the default rate |
+| PUT | `/subscription/admin/settings` | platform:pricing:manage | Change the defaults (new tenants / new invoices only). `applyToExistingTenants` re-prices tenants on the default rate |
 | GET | `/subscription/admin/:tenantId/pricing` | Platform | One tenant's rate, beds per building, estimated invoice, trial, rate history |
-| PUT | `/subscription/admin/:tenantId/rate` | Super admin | Set a custom rate per bed (`ratePerBed`), or `useDefault: true` |
-| PUT | `/subscription/admin/:tenantId/trial` | Super admin | Extend (`extendDays`) or set (`trialEndsAt`) the free trial |
+| PUT | `/subscription/admin/:tenantId/rate` | platform:pricing:manage | Set a custom rate per bed (`ratePerBed`), or `useDefault: true` |
+| PUT | `/subscription/admin/:tenantId/trial` | platform:pricing:manage | Extend (`extendDays`) or set (`trialEndsAt`) the free trial |
 | GET | `/subscription/features` | No | Feature catalog with default prices (public) |
 | GET | `/subscription/admin/features` | Platform | Catalog: every feature, price, price type, tenants using it |
-| PUT | `/subscription/admin/features/:code` | Super admin | Edit price / price type / name / availability (new invoices only) |
+| PUT | `/subscription/admin/features/:code` | platform:pricing:manage | Edit price / price type / name / availability (new invoices only) |
 | GET | `/subscription/admin/features/history` | Platform | Audit trail of feature changes (`tenantId`, `featureCode`, `scope=catalog`) |
 | GET | `/subscription/admin/:tenantId/features` | Platform | One tenant's features, prices, monthly cost and history |
-| PUT | `/subscription/admin/:tenantId/features` | Super admin | Set the complete add-on list for a tenant |
-| POST | `/subscription/admin/:tenantId/features/:code/enable` | Super admin | Enable one add-on |
-| POST | `/subscription/admin/:tenantId/features/:code/disable` | Super admin | Disable one add-on (data is kept) |
-| PUT | `/subscription/admin/:tenantId/features/:code/price` | Super admin | Special price for one tenant (`price`) or `useCatalogPrice: true` |
+| PUT | `/subscription/admin/:tenantId/features` | platform:pricing:manage | Set the complete add-on list for a tenant |
+| POST | `/subscription/admin/:tenantId/features/:code/enable` | platform:pricing:manage | Enable one add-on |
+| POST | `/subscription/admin/:tenantId/features/:code/disable` | platform:pricing:manage | Disable one add-on (data is kept) |
+| PUT | `/subscription/admin/:tenantId/features/:code/price` | platform:pricing:manage | Special price for one tenant (`price`) or `useCatalogPrice: true` |
 | GET | `/subscription/my/features` | Tenant | My features: on, locked, and what each costs |
 | GET | `/subscription/admin/analytics` | Platform | Subscription analytics (trials, paying, beds, expected revenue) |
 | GET | `/subscription/admin/invoices/:tenantId` | Platform | Get invoices for a tenant |
