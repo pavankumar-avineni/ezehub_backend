@@ -40,13 +40,6 @@ export const config = {
     timezone: process.env.DEFAULT_TIMEZONE || 'Asia/Kolkata',
   },
 
-  plans: {
-    STARTER: { price: parseInt(process.env.PLAN_STARTER_PRICE || '999', 10), buildings: parseInt(process.env.PLAN_STARTER_BUILDINGS || '1', 10) },
-    GROWTH: { price: parseInt(process.env.PLAN_GROWTH_PRICE || '1999', 10), buildings: parseInt(process.env.PLAN_GROWTH_BUILDINGS || '3', 10) },
-    BUSINESS: { price: parseInt(process.env.PLAN_BUSINESS_PRICE || '2999', 10), buildings: parseInt(process.env.PLAN_BUSINESS_BUILDINGS || '5', 10) },
-    ENTERPRISE: { price: parseInt(process.env.PLAN_ENTERPRISE_PRICE || '9999', 10), buildings: parseInt(process.env.PLAN_ENTERPRISE_BUILDINGS || '999', 10) },
-  },
-
   payment: {
     qrUrl: process.env.PAYMENT_QR_URL || '',
     upiId: process.env.PAYMENT_UPI_ID || '',

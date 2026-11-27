@@ -62,13 +62,18 @@
   "name": "Sunrise PG",
   "email": "contact@sunrisepg.com",
   "phone": "9876543210",
-  "plan": "STARTER",
   "adminFirstName": "Raj",
   "adminLastName": "Kumar",
   "adminEmail": "admin@sunrisepg.com",
-  "adminPassword": "SecurePass@123"
+  "adminPassword": "SecurePass@123",
+  "ratePerBed": 15,
+  "trialDays": 30,
+  "features": ["STAFF", "INVENTORY", "FINANCE"]
 }
 ```
+`ratePerBed`, `trialDays` and `features` are optional. Without them the tenant gets the platform defaults
+(default rate per bed, default free-trial days, default add-on features). `trialDays: 0` skips the trial.
+`features` is the exact list of add-ons for this tenant (`[]` = core features only). Core features are always on.
 
 ---
 
@@ -365,9 +370,24 @@ Fields: file, residentId, entityType, entityId, name
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| GET | `/subscription/plans` | No | Get all available plans (public) |
+| GET | `/subscription/pricing` | No | Rate per bed + free-trial days (public, for pricing/sign-up pages) |
 | GET | `/subscription/payment-config` | No | Get platform payment QR/UPI config |
-| GET | `/subscription/admin/analytics` | Platform | Subscription analytics |
+| GET | `/subscription/admin/settings` | Platform | View default rate per bed, trial days, tax % |
+| PUT | `/subscription/admin/settings` | Super admin | Change the defaults (new tenants / new invoices only). `applyToExistingTenants` re-prices tenants on the default rate |
+| GET | `/subscription/admin/:tenantId/pricing` | Platform | One tenant's rate, beds per building, estimated invoice, trial, rate history |
+| PUT | `/subscription/admin/:tenantId/rate` | Super admin | Set a custom rate per bed (`ratePerBed`), or `useDefault: true` |
+| PUT | `/subscription/admin/:tenantId/trial` | Super admin | Extend (`extendDays`) or set (`trialEndsAt`) the free trial |
+| GET | `/subscription/features` | No | Feature catalog with default prices (public) |
+| GET | `/subscription/admin/features` | Platform | Catalog: every feature, price, price type, tenants using it |
+| PUT | `/subscription/admin/features/:code` | Super admin | Edit price / price type / name / availability (new invoices only) |
+| GET | `/subscription/admin/features/history` | Platform | Audit trail of feature changes (`tenantId`, `featureCode`, `scope=catalog`) |
+| GET | `/subscription/admin/:tenantId/features` | Platform | One tenant's features, prices, monthly cost and history |
+| PUT | `/subscription/admin/:tenantId/features` | Super admin | Set the complete add-on list for a tenant |
+| POST | `/subscription/admin/:tenantId/features/:code/enable` | Super admin | Enable one add-on |
+| POST | `/subscription/admin/:tenantId/features/:code/disable` | Super admin | Disable one add-on (data is kept) |
+| PUT | `/subscription/admin/:tenantId/features/:code/price` | Super admin | Special price for one tenant (`price`) or `useCatalogPrice: true` |
+| GET | `/subscription/my/features` | Tenant | My features: on, locked, and what each costs |
+| GET | `/subscription/admin/analytics` | Platform | Subscription analytics (trials, paying, beds, expected revenue) |
 | GET | `/subscription/admin/invoices/:tenantId` | Platform | Get invoices for a tenant |
 | POST | `/subscription/admin/invoices/:tenantId` | Platform | Generate invoice for tenant |
 | POST | `/subscription/admin/invoices/:invoiceId/confirm` | Platform | Confirm tenant payment |
@@ -559,14 +579,48 @@ Fields: transactionId (required), paymentMethod (default: UPI), amount (optional
 
 ---
 
-## Subscription Plans
+## Pricing: per bed
 
-| Plan | Buildings | Devices | API | White Label | Support |
-|------|-----------|---------|-----|-------------|---------|
-| Starter | 3 | 3 | No | No | Standard |
-| Growth | 5 | 5 | No | No | Standard |
-| Business | 20 | 10 | Yes | No | Priority |
-| Enterprise | Unlimited | Unlimited | Yes | Yes | Priority |
+There are no plans. Every tenant gets every feature and unlimited buildings, and pays per bed.
+
+| Rule | Value |
+|------|-------|
+| Default rate | ₹20 per bed per month (platform setting, editable) |
+| Free trial | 15 days for new tenants (platform setting, editable, 0 = no trial) |
+| Tax | 0% by default (platform setting, editable) |
+| Billable beds | Every bed in the tenant's live buildings, empty or occupied. Deleted beds, rooms, floors and buildings are not billed |
+| Invoice | beds × rate per bed, plus one line per priced add-on feature, plus tax, for a 30-day period. All lines (`lineItems`), bed count, rate and tax % are saved on the invoice and never recalculated |
+| Custom price | The platform super admin can set a custom rate for one tenant (`PUT /subscription/admin/:tenantId/rate`). Every change is kept in the rate history |
+| When changes apply | New tenants and new invoices only. Existing invoices never change |
+| Free trial end | The first invoice's period starts when the trial ends. Nothing blocks a tenant automatically when a trial or paid period ends; the platform admin puts a tenant on hold |
+
+---
+
+## Features
+
+**Core features** (always on, included in the per-bed rate, never priced): Property setup, Residents, Rent & payments, Dashboard, Notifications, Roles & permissions.
+
+**Add-on features** (switched on per tenant by the platform, priced per bed or flat per month):
+
+| Code | Feature | Gates |
+|------|---------|-------|
+| `STAFF` | Staff management | `/tenant/staff`, `/tenant/attendance` |
+| `INVENTORY` | Inventory | `/tenant/inventory/*` |
+| `MAINTENANCE` | Maintenance requests | `/tenant/maintenance` |
+| `COMPLAINTS` | Complaints | `/tenant/complaints`, `/resident/complaints` |
+| `VISITORS` | Visitor management | `/tenant/visitors`, `/resident/visitors` |
+| `FOOD_MENU` | Food menu | `/tenant/menu`, `/resident/menu` |
+| `FINANCE` | Finance | `/tenant/finance/*` |
+| `DISCOUNTS` | Discounts | `/tenant/discounts`, `/resident/discounts` |
+| `ONLINE_PAYMENTS` | Online rent payments (needs `RESIDENT_APP`) | `/payment/rent/*` |
+| `PROMOTIONS` | Promotions | `/tenant/promotions`, `/resident/promotions` |
+| `DOCUMENTS` | Documents | `/tenant/documents`, `/resident/documents` |
+| `REPORTS` | Reports | `/tenant/reports/*` |
+| `RESIDENT_APP` | Resident app | `/resident/*` and resident OTP / password login |
+
+A tenant calling a feature it does not have gets `403` with `errors: [{ "code": "FEATURE_NOT_ENABLED", "feature": "<CODE>" }]`.
+Turning a feature off blocks access immediately but keeps the data. Turning it back on restores access.
+Login and `/auth/profile` return `enabledFeatures` (core + enabled add-ons) so the UI can hide locked menus.
 
 ---
 

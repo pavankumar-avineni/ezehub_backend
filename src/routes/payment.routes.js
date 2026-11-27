@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { authenticate } from '../middleware/auth.js';
 import { requireTenant } from '../middleware/authorize.js';
 import { tenantIsolation } from '../middleware/tenant.js';
+import { requireFeature } from '../middleware/feature.js';
 import razorpayService from '../services/razorpay.service.js';
 import { successResponse } from '../utils/response.js';
 
@@ -28,7 +29,7 @@ router.post('/subscription/verify', authenticate, requireTenant, tenantIsolation
 // ─── RESIDENT RENT PAYMENTS (Resident → Tenant) ──────────────────
 
 // Create order for rent payment
-router.post('/rent/create-order', authenticate, async (req, res, next) => {
+router.post('/rent/create-order', authenticate, requireFeature('RESIDENT_APP', 'ONLINE_PAYMENTS'), async (req, res, next) => {
   try {
     if (req.user.scope !== 'RESIDENT') return res.status(403).json({ success: false, message: 'Resident only' });
     const order = await razorpayService.createRentOrder(req.user.tenantId, req.user.userId, req.body.chargeId);
@@ -37,7 +38,7 @@ router.post('/rent/create-order', authenticate, async (req, res, next) => {
 });
 
 // Verify rent payment
-router.post('/rent/verify', authenticate, async (req, res, next) => {
+router.post('/rent/verify', authenticate, requireFeature('RESIDENT_APP', 'ONLINE_PAYMENTS'), async (req, res, next) => {
   try {
     if (req.user.scope !== 'RESIDENT') return res.status(403).json({ success: false, message: 'Resident only' });
     const result = await razorpayService.verifyRentPayment(req.user.tenantId, req.user.userId, req.body);
@@ -46,7 +47,7 @@ router.post('/rent/verify', authenticate, async (req, res, next) => {
 });
 
 // Get tenant's Razorpay Key ID (public key only — for checkout)
-router.get('/rent/key', authenticate, async (req, res, next) => {
+router.get('/rent/key', authenticate, requireFeature('RESIDENT_APP', 'ONLINE_PAYMENTS'), async (req, res, next) => {
   try {
     if (req.user.scope !== 'RESIDENT') return res.status(403).json({ success: false, message: 'Resident only' });
     const { keyId } = await razorpayService.getTenantInstance(req.user.tenantId);

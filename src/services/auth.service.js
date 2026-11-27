@@ -2,6 +2,7 @@ import prisma from '../config/database.js';
 import { hashPassword, comparePassword } from '../utils/password.js';
 import { generateAccessToken, generateRefreshToken, getTokenExpiry } from '../utils/jwt.js';
 import { UnauthorizedError, NotFoundError } from '../utils/errors.js';
+import featureService from './feature.service.js';
 
 class AuthService {
   async platformLogin(email, password) {
@@ -161,6 +162,8 @@ class AuthService {
     });
 
     if (!resident) throw new UnauthorizedError('No active resident found with this phone number');
+    // The resident app is an add-on the platform switches on per tenant.
+    await featureService.assertEnabled(resident.tenantId, 'RESIDENT_APP');
 
     // Generate 6-digit OTP
     const otp = String(Math.floor(100000 + Math.random() * 900000));
@@ -206,6 +209,7 @@ class AuthService {
     });
 
     if (!resident) throw new UnauthorizedError('No active resident found');
+    await featureService.assertEnabled(resident.tenantId, 'RESIDENT_APP');
     if (!resident.loginOtp || resident.loginOtp !== otp) throw new UnauthorizedError('Invalid OTP');
     if (!resident.otpExpiresAt || resident.otpExpiresAt < new Date()) {
       // OTP expired — clear it and delete notification
@@ -242,6 +246,7 @@ class AuthService {
     });
 
     if (!resident) throw new UnauthorizedError('No active resident found with this phone number');
+    await featureService.assertEnabled(resident.tenantId, 'RESIDENT_APP');
     if (!resident.passwordHash) throw new UnauthorizedError('Password not set. Please use OTP login.');
     if (!(await comparePassword(password, resident.passwordHash))) throw new UnauthorizedError('Invalid password');
 
@@ -319,6 +324,8 @@ class AuthService {
     });
 
     const permissions = user.role.permissions.map((rp) => rp.permission.code);
+    // Feature codes the tenant can use (core + enabled add-ons) so the UI can hide locked menus.
+    const enabledFeatures = scope === 'TENANT' && tenant ? await featureService.getEnabledCodes(tenant.id) : undefined;
 
     return {
       accessToken,
@@ -332,6 +339,7 @@ class AuthService {
         role: { id: user.role.id, name: user.role.name, code: user.role.code },
         permissions,
         ...(tenant && { tenant: { id: tenant.id, name: tenant.name, status: tenant.status } }),
+        ...(enabledFeatures && { enabledFeatures }),
       },
     };
   }

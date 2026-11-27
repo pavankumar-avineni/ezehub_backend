@@ -3,6 +3,7 @@ import { authenticate } from '../middleware/auth.js';
 import { authorize, requireTenant } from '../middleware/authorize.js';
 import { tenantIsolation } from '../middleware/tenant.js';
 import { validate } from '../middleware/validate.js';
+import { requireFeature } from '../middleware/feature.js';
 import { uploadSingle } from '../middleware/upload.js';
 import { PERMISSIONS } from '../constants/index.js';
 import {
@@ -20,6 +21,7 @@ import {
   inventoryServiceLogIdSchema, listInventoryServiceLogsSchema, createInventoryAuditSchema,
   listInventoryAuditsSchema, inventoryAuditDetailSchema, scanInventoryAuditSchema,
   completeInventoryAuditSchema, inventoryExportSchema, listItemInventoryServiceLogsSchema,
+  createRoleSchema, updateRoleSchema, updateRolePermissionsSchema,
 } from '../validators/index.js';
 import * as inv from '../controllers/inventory.controller.js';
 
@@ -35,6 +37,21 @@ import * as ctrl from '../controllers/tenant-modules.controller.js';
 const router = Router();
 
 router.use(authenticate, requireTenant, tenantIsolation, requireActiveSubscription);
+
+// Feature gates. Core features (property setup, residents, rent & payments, dashboard,
+// notifications, roles) have no gate. Add-ons answer 403 FEATURE_NOT_ENABLED until the
+// platform enables them for the tenant.
+router.use(['/staff', '/attendance'], requireFeature('STAFF'));
+router.use('/inventory', requireFeature('INVENTORY'));
+router.use('/maintenance', requireFeature('MAINTENANCE'));
+router.use('/complaints', requireFeature('COMPLAINTS'));
+router.use('/visitors', requireFeature('VISITORS'));
+router.use('/menu', requireFeature('FOOD_MENU'));
+router.use('/finance', requireFeature('FINANCE'));
+router.use('/discounts', requireFeature('DISCOUNTS'));
+router.use('/promotions', requireFeature('PROMOTIONS'));
+router.use('/documents', requireFeature('DOCUMENTS'));
+router.use('/reports', requireFeature('REPORTS'));
 
 // Dashboard & Reports
 router.get('/dashboard', ctrl.getTenantDashboard);
@@ -214,12 +231,15 @@ router.post('/menu/bulk', ctrl.bulkUpsertMenu);
 router.delete('/menu/:id', ctrl.deleteMenu);
 
 // Roles & Permissions
-router.get('/roles', ctrl.getRoles);
-router.post('/roles', ctrl.createRole);
-router.put('/roles/:id', ctrl.updateRole);
-router.delete('/roles/:id', ctrl.deleteRole);
-router.get('/permissions', ctrl.getPermissions);
-router.put('/roles/:id/permissions', ctrl.updateRolePermissions);
+// Only users with roles:manage may read or change roles. Without this any tenant user
+// (for example a guard) could give their own role every permission.
+const rolesManage = authorize(PERMISSIONS.ROLES_MANAGE);
+router.get('/roles', rolesManage, ctrl.getRoles);
+router.post('/roles', rolesManage, validate(createRoleSchema), ctrl.createRole);
+router.put('/roles/:id', rolesManage, validate(updateRoleSchema), ctrl.updateRole);
+router.delete('/roles/:id', rolesManage, validate(idParamSchema), ctrl.deleteRole);
+router.get('/permissions', rolesManage, ctrl.getPermissions);
+router.put('/roles/:id/permissions', rolesManage, validate(updateRolePermissionsSchema), ctrl.updateRolePermissions);
 
 // Bed Visual Map
 router.get('/bed-map/:buildingId', ctrl.getBedMap);

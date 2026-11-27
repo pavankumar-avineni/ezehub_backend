@@ -3,6 +3,7 @@ import config, { validateConfig } from './config/index.js';
 import logger from './utils/logger.js';
 import prisma from './config/database.js';
 import redis from './config/redis.js';
+import featureService from './services/feature.service.js';
 
 let server;
 
@@ -13,6 +14,9 @@ const start = async () => {
 
     await prisma.$connect();
     logger.info('Database connected');
+
+    // Make sure every feature defined in code exists in the database (never overwrites prices).
+    await featureService.ensureCatalog();
 
     server = app.listen(config.port, () => {
       const baseUrl =

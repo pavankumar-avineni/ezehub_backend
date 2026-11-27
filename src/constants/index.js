@@ -1,8 +1,13 @@
-export const SUBSCRIPTION_PLANS = {
-  STARTER: { buildingLimit: 3, deviceLimit: 3, apiAccess: false, whiteLabel: false, prioritySupport: false, price: 999 },
-  GROWTH: { buildingLimit: 5, deviceLimit: 5, apiAccess: false, whiteLabel: false, prioritySupport: false, price: 2499 },
-  BUSINESS: { buildingLimit: 20, deviceLimit: 10, apiAccess: true, whiteLabel: false, prioritySupport: true, price: 4999 },
-  ENTERPRISE: { buildingLimit: -1, deviceLimit: -1, apiAccess: true, whiteLabel: true, prioritySupport: true, price: 9999 },
+// Per-bed pricing. These are only the factory defaults used when the billing_settings
+// row does not exist yet. The live values are stored in the database and are editable
+// by the platform super admin.
+export const BILLING_DEFAULTS = {
+  RATE_PER_BED: 20,
+  TRIAL_DAYS: 15,
+  TAX_PERCENT: 0,
+  BILLING_PERIOD_DAYS: 30,
+  MAX_RATE_PER_BED: 100000,
+  MAX_TRIAL_DAYS: 365,
 };
 
 export const PLATFORM_ROLES = {

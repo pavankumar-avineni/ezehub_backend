@@ -1,22 +1,29 @@
 import prisma from '../config/database.js';
 import config from '../config/index.js';
-import { NotFoundError, ForbiddenError } from '../utils/errors.js';
+import { NotFoundError, ForbiddenError, ValidationError } from '../utils/errors.js';
+import { BILLING_DEFAULTS } from '../constants/index.js';
+import billingService from './billing.service.js';
+import featureService from './feature.service.js';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 class SubscriptionService {
-  // Get plan details from config
-  getPlanDetails(plan) {
-    const planConfig = config.plans[plan];
-    if (!planConfig) throw new NotFoundError('Plan');
-    return { plan, price: planConfig.price, buildings: planConfig.buildings };
-  }
-
-  getAllPlans() {
-    return Object.entries(config.plans).map(([name, details]) => ({
-      name,
-      price: details.price,
-      buildings: details.buildings,
-      priceFormatted: `₹${details.price}/month`,
-    }));
+  // Public pricing (for the pricing page / sign-up screen)
+  async getPricing() {
+    const settings = await billingService.getSettings();
+    const rate = settings.defaultRatePerBed;
+    return {
+      model: 'PER_BED',
+      ratePerBed: rate,
+      currency: settings.currency,
+      billingPeriodDays: settings.billingPeriodDays,
+      trialDays: settings.trialDays,
+      taxPercent: settings.taxPercent,
+      priceFormatted: `₹${rate} per bed per month`,
+      examples: [10, 50, 100].map((beds) => ({ beds, monthlyAmount: billingService.computeCharge(beds, rate, 0).amount })),
+      // Core features are included in the per-bed rate. Add-ons are priced per bed or flat per month.
+      features: await featureService.getPublicCatalog(),
+    };
   }
 
   // Generate invoice for a tenant (Platform admin only)
@@ -29,12 +36,21 @@ class SubscriptionService {
     if (!tenant.subscription) throw new NotFoundError('Subscription');
 
     const sub = tenant.subscription;
-    const planDetails = this.getPlanDetails(sub.plan);
 
-    // Calculate billing period
+    // Bill every bed that exists today, at this tenant's current rate and the current tax %.
+    const [settings, beds, features] = await Promise.all([
+      billingService.getSettings(),
+      billingService.countBillableBeds(tenantId),
+      featureService.getBillableFeatures(tenantId),
+    ]);
+    if (beds === 0) throw new ValidationError('This tenant has no beds yet, so there is nothing to bill');
+    // Beds at the tenant's rate + one line per priced add-on feature, plus tax.
+    const charge = billingService.computeInvoice(beds, sub.ratePerBed, settings.taxPercent, features);
+    if (charge.total <= 0) throw new ValidationError('The invoice total would be 0 (the tenant rate is 0), so no invoice was created');
+
+    // Billing period starts after the free trial / current paid period ends
     const billingStart = sub.endDate && sub.endDate > new Date() ? new Date(sub.endDate) : new Date();
-    const billingEnd = new Date(billingStart);
-    billingEnd.setDate(billingEnd.getDate() + 30);
+    const billingEnd = new Date(billingStart.getTime() + BILLING_DEFAULTS.BILLING_PERIOD_DAYS * DAY_MS);
 
     const dueDate = new Date();
     dueDate.setDate(dueDate.getDate() + 7); // 7 days to pay
@@ -48,10 +64,13 @@ class SubscriptionService {
         subscriptionId: sub.id,
         tenantId,
         invoiceNumber,
-        plan: sub.plan,
-        amount: planDetails.price,
-        tax: 0,
-        total: planDetails.price,
+        bedCount: charge.beds,
+        ratePerBed: charge.ratePerBed,
+        taxPercent: charge.taxPercent,
+        lineItems: charge.lines,
+        amount: charge.amount,
+        tax: charge.tax,
+        total: charge.total,
         billingStart,
         billingEnd,
         dueDate,
@@ -144,7 +163,7 @@ class SubscriptionService {
           userId: tenantUser.id,
           userType: 'TENANT',
           title: 'Payment Confirmed',
-          message: `Your payment of ₹${invoice.total} for ${invoice.plan} plan has been confirmed. Subscription active until ${invoice.billingEnd.toLocaleDateString('en-IN')}.`,
+          message: `Your payment of ₹${invoice.total}${invoice.bedCount ? ` (${invoice.bedCount} beds × ₹${invoice.ratePerBed})` : ''} has been confirmed. Subscription active until ${invoice.billingEnd.toLocaleDateString('en-IN')}.`,
           channel: 'IN_APP',
           status: 'PENDING',
         },
@@ -207,23 +226,39 @@ class SubscriptionService {
     if (!tenant) throw new NotFoundError('Tenant');
 
     const sub = tenant.subscription;
-    const now = new Date();
-    const daysLeft = sub?.endDate ? Math.max(0, Math.ceil((new Date(sub.endDate) - now) / (1000 * 60 * 60 * 24))) : 0;
-    const isExpiringSoon = daysLeft <= 7 && daysLeft > 0;
-    const isExpired = sub?.endDate && new Date(sub.endDate) < now;
+    let subscription = null;
+    let pricing = null;
+
+    if (sub) {
+      const [settings, breakdown, billableFeatures] = await Promise.all([
+        billingService.getSettings(),
+        billingService.getBedBreakdown(tenantId),
+        featureService.getBillableFeatures(tenantId),
+      ]);
+      const beds = breakdown.reduce((s, b) => s + b.beds, 0);
+      const formatted = billingService.formatSubscription(sub, settings);
+      subscription = {
+        ...formatted,
+        isExpiringSoon: formatted.daysLeft <= 7 && formatted.daysLeft > 0,
+      };
+      pricing = {
+        model: 'PER_BED',
+        ratePerBed: formatted.ratePerBed,
+        isCustomRate: formatted.isCustomRate,
+        currency: settings.currency,
+        taxPercent: settings.taxPercent,
+        billableBeds: beds,
+        bedsByBuilding: breakdown,
+        enabledAddOns: billableFeatures.map((f) => f.code),
+        estimatedNextInvoice: billingService.computeInvoice(beds, sub.ratePerBed, settings.taxPercent, billableFeatures),
+      };
+    }
 
     return {
       tenant: { id: tenant.id, name: tenant.name, status: tenant.status },
-      subscription: sub ? {
-        plan: sub.plan,
-        status: sub.status,
-        startDate: sub.startDate,
-        endDate: sub.endDate,
-        daysLeft,
-        isExpiringSoon,
-        isExpired,
-        price: config.plans[sub.plan]?.price,
-      } : null,
+      subscription,
+      pricing,
+      enabledFeatures: await featureService.getEnabledCodes(tenantId),
       invoices: tenant.billingInvoices,
       payment: {
         qrUrl: config.payment.qrUrl,
@@ -234,7 +269,7 @@ class SubscriptionService {
 
   // Platform analytics for subscriptions
   async getSubscriptionAnalytics() {
-    const [total, active, onHold, suspended, dismissed, expiringSoon, revenue] = await Promise.all([
+    const [total, active, onHold, suspended, dismissed, expiringSoon, revenue, activeSubs, bedsByTenant] = await Promise.all([
       prisma.tenant.count({ where: { deletedAt: null } }),
       prisma.tenant.count({ where: { status: 'ACTIVE' } }),
       prisma.tenant.count({ where: { status: 'ON_HOLD' } }),
@@ -250,9 +285,36 @@ class SubscriptionService {
         where: { status: 'PAID', paidAt: { gte: new Date(new Date().getFullYear(), new Date().getMonth(), 1) } },
         _sum: { total: true },
       }),
+      prisma.subscription.findMany({
+        where: { tenant: { deletedAt: null, status: { in: ['ACTIVE', 'ON_HOLD'] } }, status: { in: ['ACTIVE', 'TRIAL'] } },
+        select: { tenantId: true, status: true, ratePerBed: true },
+      }),
+      billingService.countBillableBedsByTenant(),
     ]);
+    const featuresByTenant = await featureService.getBillableFeaturesByTenant();
 
-    return { total, active, onHold, suspended, dismissed, expiringSoon, monthlyRevenue: Number(revenue._sum.total || 0) };
+    // Expected monthly income at today's bed counts, rates and enabled add-ons (before tax).
+    let totalBillableBeds = 0;
+    let estimatedMonthlyRecurring = 0;
+    let trialPipeline = 0;
+    let trialTenants = 0;
+    let payingTenants = 0;
+    for (const s of activeSubs) {
+      const beds = bedsByTenant.get(s.tenantId) || 0;
+      const amount = billingService.computeInvoice(beds, s.ratePerBed, 0, featuresByTenant.get(s.tenantId) || []).amount;
+      totalBillableBeds += beds;
+      if (s.status === 'TRIAL') { trialTenants += 1; trialPipeline += amount; } else { payingTenants += 1; estimatedMonthlyRecurring += amount; }
+    }
+
+    return {
+      total, active, onHold, suspended, dismissed, expiringSoon,
+      monthlyRevenue: Number(revenue._sum.total || 0),
+      trialTenants,
+      payingTenants,
+      totalBillableBeds,
+      estimatedMonthlyRecurring: Math.round(estimatedMonthlyRecurring * 100) / 100,
+      trialPipeline: Math.round(trialPipeline * 100) / 100,
+    };
   }
 }
 

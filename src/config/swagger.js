@@ -2,6 +2,7 @@ import swaggerJsdoc from 'swagger-jsdoc';
 import config from './index.js';
 import logger from '../utils/logger.js';
 import { syncSpecWithRoutes } from './swagger.sync.js';
+import { FEATURE_CODES, ADDON_FEATURE_CODES } from '../constants/features.js';
 
 // ─── Inventory paths (built with helpers to keep the spec readable) ───
 const INV = 'Tenant - Inventory';
@@ -240,6 +241,267 @@ const extraPaths = {
   },
 };
 
+// ─── Per-bed billing endpoints ─────────────────────────────────────
+const BILL = 'Platform - Billing';
+const envelope = (data, description = 'Success') => ({
+  description,
+  content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, message: { type: 'string' }, data } } } },
+});
+const chargeSchema = {
+  type: 'object',
+  description: 'amount = beds × ratePerBed, tax = amount × taxPercent, total = amount + tax',
+  properties: {
+    beds: { type: 'integer' }, ratePerBed: { type: 'number' }, taxPercent: { type: 'number' },
+    amount: { type: 'number' }, tax: { type: 'number' }, total: { type: 'number' },
+  },
+};
+const settingsSchema = {
+  type: 'object',
+  properties: {
+    defaultRatePerBed: { type: 'number', example: 20, description: 'Rupees per bed per month for new tenants' },
+    trialDays: { type: 'integer', example: 15, description: 'Free-trial length for new tenants' },
+    taxPercent: { type: 'number', example: 0, description: 'Tax added to every new invoice' },
+    defaultFeatures: { type: 'array', items: { type: 'string', enum: ADDON_FEATURE_CODES }, description: 'Add-on features given to new tenants when none are chosen (self sign-up, or create without `features`)' },
+    currency: { type: 'string', example: 'INR' },
+    billingPeriodDays: { type: 'integer', example: 30 },
+    updatedBy: { type: 'string', nullable: true }, updatedAt: { type: 'string', format: 'date-time' },
+  },
+};
+const subscriptionSchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'string', format: 'uuid' },
+    status: { type: 'string', enum: ['TRIAL', 'ACTIVE', 'EXPIRED', 'CANCELLED'] },
+    ratePerBed: { type: 'number' },
+    isCustomRate: { type: 'boolean', description: 'true when the platform admin set this tenant\'s rate by hand' },
+    defaultRatePerBed: { type: 'number', description: 'Current platform default, for comparison' },
+    billingCycle: { type: 'string' }, startDate: { type: 'string', format: 'date-time' }, endDate: { type: 'string', format: 'date-time', nullable: true },
+    daysLeft: { type: 'integer' }, isExpired: { type: 'boolean' },
+    isTrial: { type: 'boolean' }, trialEndsAt: { type: 'string', format: 'date-time', nullable: true },
+    trialDaysLeft: { type: 'integer' }, trialEnded: { type: 'boolean' },
+  },
+};
+const tenantPricingSchema = {
+  type: 'object',
+  properties: {
+    tenant: { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' }, status: { type: 'string' } } },
+    subscription: subscriptionSchema,
+    billableBeds: { type: 'integer', description: 'Every bed in the tenant\'s live buildings (empty or occupied)' },
+    bedsByBuilding: { type: 'array', items: { type: 'object', properties: { buildingId: { type: 'string' }, buildingName: { type: 'string' }, beds: { type: 'integer' } } } },
+    estimatedNextInvoice: chargeSchema,
+    platformDefaults: { type: 'object', properties: { defaultRatePerBed: { type: 'number' }, trialDays: { type: 'integer' }, taxPercent: { type: 'number' } } },
+    rateHistory: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, oldRate: { type: 'number', nullable: true }, newRate: { type: 'number' }, isCustomRate: { type: 'boolean' }, reason: { type: 'string', nullable: true }, changedBy: { type: 'string', nullable: true }, createdAt: { type: 'string', format: 'date-time' } } } },
+  },
+};
+const tenantIdPath = [{ name: 'tenantId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }];
+const superAdminNote = 'Platform super admin only.';
+
+const FEAT_CODES = FEATURE_CODES;
+const ADDON_CODES = ADDON_FEATURE_CODES;
+const featureSchema = {
+  type: 'object',
+  properties: {
+    code: { type: 'string', enum: FEAT_CODES, example: 'INVENTORY' },
+    name: { type: 'string' }, description: { type: 'string' }, group: { type: 'string' },
+    isCore: { type: 'boolean', description: 'Core features are included in the per-bed rate and cannot be turned off or priced' },
+    price: { type: 'number', description: 'Catalog (default) price of an add-on' },
+    priceType: { type: 'string', enum: ['PER_BED', 'FLAT'], description: 'PER_BED = price × billable beds per month. FLAT = price once per month' },
+    isActive: { type: 'boolean', description: 'false = cannot be newly assigned (existing tenants keep it)' },
+    requires: { type: 'array', items: { type: 'string' }, description: 'Features that must also be enabled' },
+    tenantsUsing: { type: 'integer' },
+  },
+};
+
+const billingPaths = {
+  '/auth/signup': {
+    post: {
+      tags: ['Auth'],
+      summary: 'Tenant self sign-up (public)',
+      description: 'Creates the tenant and its admin user and logs them in. The tenant starts on the platform\'s free trial at the default rate per bed. Rate limited.',
+      security: [],
+      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['businessName', 'firstName', 'lastName', 'email', 'phone', 'password'], properties: { businessName: { type: 'string' }, firstName: { type: 'string' }, lastName: { type: 'string' }, email: { type: 'string', format: 'email' }, phone: { type: 'string', description: '10 digits' }, password: { type: 'string', minLength: 8 } } } } } },
+      responses: { 201: { description: 'Account registered, tokens returned', content: { 'application/json': { schema: { $ref: '#/components/schemas/TokenResponse' } } } }, 409: { description: 'Email already registered' } },
+    },
+  },
+  '/subscription/pricing': {
+    get: {
+      tags: ['Subscription'],
+      summary: 'Public pricing: rate per bed and free-trial length',
+      description: 'Use on the pricing page and sign-up screen. Values come from the platform billing settings.',
+      security: [],
+      responses: { 200: envelope({ type: 'object', properties: { model: { type: 'string', example: 'PER_BED' }, ratePerBed: { type: 'number', example: 20 }, currency: { type: 'string' }, billingPeriodDays: { type: 'integer' }, trialDays: { type: 'integer', example: 15 }, taxPercent: { type: 'number' }, priceFormatted: { type: 'string', example: '₹20 per bed per month' }, examples: { type: 'array', items: { type: 'object', properties: { beds: { type: 'integer' }, monthlyAmount: { type: 'number' } } } }, features: { type: 'array', description: 'Feature catalog: core features are included, add-ons have a price', items: featureSchema } } }, 'Pricing') },
+    },
+  },
+  '/subscription/admin/settings': {
+    get: {
+      tags: [BILL],
+      summary: 'Get platform billing settings (default rate per bed, trial days, tax %)',
+      responses: { 200: envelope(settingsSchema, 'Billing settings') },
+    },
+    put: {
+      tags: [BILL],
+      summary: 'Change platform billing settings',
+      description: `${superAdminNote} Changes apply to NEW tenants and NEW invoices only. Existing invoices never change. Set \`applyToExistingTenants: true\` together with \`defaultRatePerBed\` to also re-price tenants that are on the default rate. Tenants with a custom rate are never touched.`,
+      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { defaultRatePerBed: { type: 'number', example: 20 }, trialDays: { type: 'integer', example: 15 }, taxPercent: { type: 'number', example: 0 }, defaultFeatures: { type: 'array', items: { type: 'string', enum: ADDON_FEATURE_CODES } }, applyToExistingTenants: { type: 'boolean', default: false } } } } } },
+      responses: { 200: envelope({ ...settingsSchema, properties: { ...settingsSchema.properties, tenantsRepriced: { type: 'integer' } } }, 'Settings updated'), 403: { description: 'Not a super admin' }, 422: { description: 'Validation failed' } },
+    },
+  },
+  '/subscription/admin/{tenantId}/pricing': {
+    get: {
+      tags: [BILL],
+      summary: 'One tenant\'s pricing: rate, beds, estimated invoice, trial and rate history',
+      parameters: tenantIdPath,
+      responses: { 200: envelope(tenantPricingSchema, 'Tenant pricing'), 404: { description: 'Tenant not found' } },
+    },
+  },
+  '/subscription/admin/{tenantId}/rate': {
+    put: {
+      tags: [BILL],
+      summary: 'Set a custom rate per bed for one tenant',
+      description: `${superAdminNote} Send \`ratePerBed\` to set a custom rate, or \`useDefault: true\` to follow the platform default again. Affects future invoices only. Every change is saved in the rate history.`,
+      parameters: tenantIdPath,
+      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { ratePerBed: { type: 'number', example: 15 }, useDefault: { type: 'boolean' }, reason: { type: 'string', example: 'Volume discount' } } } } } },
+      responses: { 200: envelope(tenantPricingSchema, 'Updated tenant pricing'), 403: { description: 'Not a super admin' }, 404: { description: 'Tenant not found' }, 409: { description: 'The tenant already has this rate' } },
+    },
+  },
+  '/subscription/admin/{tenantId}/trial': {
+    put: {
+      tags: [BILL],
+      summary: 'Change when a tenant\'s free trial ends',
+      description: `${superAdminNote} Send \`extendDays\` (adds days to the current end, or to today if the trial already ended) or \`trialEndsAt\` (exact date). Only for tenants that have not paid yet.`,
+      parameters: tenantIdPath,
+      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { extendDays: { type: 'integer', example: 7 }, trialEndsAt: { type: 'string', format: 'date-time' } } } } } },
+      responses: { 200: envelope(tenantPricingSchema, 'Updated tenant pricing'), 403: { description: 'Not a super admin' }, 409: { description: 'Tenant is not on a free trial' } },
+    },
+  },
+};
+
+// ─── Feature catalog & per-tenant features ─────────────────────────
+const tenantFeatureSchema = {
+  type: 'object',
+  properties: {
+    ...featureSchema.properties,
+    enabled: { type: 'boolean' },
+    isIncluded: { type: 'boolean', description: 'true for core features' },
+    catalogPrice: { type: 'number' },
+    customPrice: { type: 'number', nullable: true, description: 'This tenant\'s special price, if one was set' },
+    isCustomPrice: { type: 'boolean' },
+    effectivePrice: { type: 'number', description: 'customPrice if set, otherwise the catalog price' },
+    monthlyCost: { type: 'number', nullable: true, description: 'What this feature costs this tenant per month at today\'s bed count' },
+    enabledAt: { type: 'string', format: 'date-time', nullable: true },
+    disabledAt: { type: 'string', format: 'date-time', nullable: true },
+    canBeEnabled: { type: 'boolean' },
+  },
+};
+const tenantFeaturesView = {
+  type: 'object',
+  properties: {
+    billableBeds: { type: 'integer' },
+    features: { type: 'array', items: tenantFeatureSchema },
+    enabledCodes: { type: 'array', items: { type: 'string' }, description: 'Core + enabled add-ons. Use this to show or hide menus' },
+    summary: { type: 'object', properties: { core: { type: 'integer' }, addOnsEnabled: { type: 'integer' }, addOnsAvailable: { type: 'integer' } } },
+    history: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, featureCode: { type: 'string' }, action: { type: 'string', enum: ['ENABLED', 'DISABLED', 'PRICE_SET', 'PRICE_RESET'] }, oldValue: { type: 'object', nullable: true }, newValue: { type: 'object', nullable: true }, reason: { type: 'string', nullable: true }, changedBy: { type: 'string', nullable: true }, createdAt: { type: 'string', format: 'date-time' } } } },
+  },
+};
+const codeParam = (enumCodes) => ({ name: 'code', in: 'path', required: true, schema: { type: 'string', enum: enumCodes } });
+const notEnabledNote = 'Fails with 422 if a feature\'s requirement is missing (for example ONLINE_PAYMENTS needs RESIDENT_APP).';
+
+const featurePaths = {
+  '/subscription/features': {
+    get: {
+      tags: ['Subscription'],
+      summary: 'Public feature catalog with default prices',
+      description: 'Core features are included in the per-bed rate. Add-ons are priced per bed or as a flat monthly amount. A tenant can have a special price set by the platform.',
+      security: [],
+      responses: { 200: envelope({ type: 'array', items: featureSchema }, 'Feature catalog') },
+    },
+  },
+  '/subscription/admin/features': {
+    get: {
+      tags: [BILL],
+      summary: 'Feature catalog for the platform: every feature, price, price type and how many tenants use it',
+      responses: { 200: envelope({ type: 'array', items: featureSchema }, 'Feature catalog') },
+    },
+  },
+  '/subscription/admin/features/history': {
+    get: {
+      tags: [BILL],
+      summary: 'Audit trail of feature changes (catalog edits, enable/disable, price changes)',
+      parameters: [
+        { name: 'page', in: 'query', schema: { type: 'integer' } }, { name: 'limit', in: 'query', schema: { type: 'integer' } },
+        { name: 'tenantId', in: 'query', schema: { type: 'string', format: 'uuid' } },
+        { name: 'featureCode', in: 'query', schema: { type: 'string', enum: FEAT_CODES } },
+        { name: 'scope', in: 'query', schema: { type: 'string', enum: ['catalog'] }, description: 'catalog = only platform-level catalog changes' },
+      ],
+      responses: { 200: { description: 'Paginated change log' } },
+    },
+  },
+  '/subscription/admin/features/{code}': {
+    put: {
+      tags: [BILL],
+      summary: 'Edit a feature in the catalog (price, price type, name, availability)',
+      description: `${superAdminNote} Changes apply to NEW invoices only. Tenants with a special price keep it, except when the price type changes (their special prices are cleared because they were set for the old type). Core features can only change name and description.`,
+      parameters: [codeParam(FEAT_CODES)],
+      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { price: { type: 'number', example: 3 }, priceType: { type: 'string', enum: ['PER_BED', 'FLAT'] }, name: { type: 'string' }, description: { type: 'string' }, isActive: { type: 'boolean' }, reason: { type: 'string' } } } } } },
+      responses: { 200: envelope({ ...featureSchema, properties: { ...featureSchema.properties, customPricesCleared: { type: 'integer' } } }, 'Feature updated'), 403: { description: 'Not a super admin' }, 409: { description: 'Nothing to change, or editing a core feature price' } },
+    },
+  },
+  '/subscription/admin/{tenantId}/features': {
+    get: {
+      tags: [BILL],
+      summary: 'One tenant\'s features: core + every add-on with state, price and monthly cost, plus recent history',
+      parameters: tenantIdPath,
+      responses: { 200: envelope(tenantFeaturesView, 'Tenant features'), 404: { description: 'Tenant not found' } },
+    },
+    put: {
+      tags: [BILL],
+      summary: 'Set the complete list of add-on features for a tenant',
+      description: `${superAdminNote} Send every add-on the tenant should have. Others are switched off: access is blocked but data is kept. New features are billed from the next invoice. ${notEnabledNote}`,
+      parameters: tenantIdPath,
+      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['features'], properties: { features: { type: 'array', items: { type: 'string', enum: ADDON_CODES } }, reason: { type: 'string' } } } } } },
+      responses: { 200: envelope({ ...tenantFeaturesView, properties: { ...tenantFeaturesView.properties, enabled: { type: 'array', items: { type: 'string' } }, disabled: { type: 'array', items: { type: 'string' } } } }, 'Tenant features updated'), 403: { description: 'Not a super admin' }, 422: { description: 'Unknown code, unavailable feature or missing requirement' } },
+    },
+  },
+  '/subscription/admin/{tenantId}/features/{code}/enable': {
+    post: {
+      tags: [BILL],
+      summary: 'Enable one add-on feature for a tenant',
+      description: `${superAdminNote} ${notEnabledNote}`,
+      parameters: [...tenantIdPath, codeParam(ADDON_CODES)],
+      requestBody: { required: false, content: { 'application/json': { schema: { type: 'object', properties: { reason: { type: 'string' } } } } } },
+      responses: { 200: envelope(tenantFeaturesView, 'Feature enabled'), 409: { description: 'Already enabled' }, 422: { description: 'Missing requirement or feature not available' } },
+    },
+  },
+  '/subscription/admin/{tenantId}/features/{code}/disable': {
+    post: {
+      tags: [BILL],
+      summary: 'Disable one add-on feature for a tenant (data is kept)',
+      description: `${superAdminNote} The tenant's APIs for this feature start answering 403 FEATURE_NOT_ENABLED. Charges stop from the next invoice.`,
+      parameters: [...tenantIdPath, codeParam(ADDON_CODES)],
+      requestBody: { required: false, content: { 'application/json': { schema: { type: 'object', properties: { reason: { type: 'string' } } } } } },
+      responses: { 200: envelope(tenantFeaturesView, 'Feature disabled'), 409: { description: 'Not enabled' }, 422: { description: 'Another enabled feature needs this one' } },
+    },
+  },
+  '/subscription/admin/{tenantId}/features/{code}/price': {
+    put: {
+      tags: [BILL],
+      summary: 'Give one tenant a special price for one feature',
+      description: `${superAdminNote} The price uses the feature's price type (per bed or flat). Send useCatalogPrice: true to go back to the catalog price. The feature must already be enabled for the tenant. Affects future invoices only.`,
+      parameters: [...tenantIdPath, codeParam(ADDON_CODES)],
+      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: { price: { type: 'number', example: 1.5 }, useCatalogPrice: { type: 'boolean' }, reason: { type: 'string' } } } } } },
+      responses: { 200: envelope(tenantFeaturesView, 'Price updated'), 409: { description: 'Feature not enabled for the tenant, or same price' } },
+    },
+  },
+  '/subscription/my/features': {
+    get: {
+      tags: ['Subscription'],
+      summary: 'My features: which are on, which are locked, and what each costs me',
+      description: 'Locked features have `enabled: false` and show their price. Use `enabledCodes` to show or hide menus.',
+      responses: { 200: envelope({ ...tenantFeaturesView, properties: Object.fromEntries(Object.entries(tenantFeaturesView.properties).filter(([k]) => k !== 'history')) }, 'My features') },
+    },
+  },
+};
+
 const options = {
   definition: {
     openapi: '3.1.0',
@@ -255,8 +517,8 @@ const options = {
     tags: [
       { name: 'Auth', description: 'Authentication — Login, OTP, Token refresh' },
       { name: 'Platform - Tenants', description: 'Platform admin tenant management' },
-      { name: 'Platform - Billing', description: 'Subscription invoicing & payment confirmation' },
-      { name: 'Subscription', description: 'Public plans & tenant subscription management' },
+      { name: 'Platform - Billing', description: 'Per-bed rate, free-trial and tax controls, invoicing & payment confirmation' },
+      { name: 'Subscription', description: 'Per-bed pricing, feature catalog, free trial and tenant subscription. Add-on features (Staff, Inventory, Maintenance, Complaints, Visitors, Food menu, Finance, Discounts, Online payments, Promotions, Documents, Reports, Resident app) answer 403 with code FEATURE_NOT_ENABLED until the platform enables them for the tenant' },
       { name: 'Tenant - Dashboard', description: 'Tenant dashboard & reports' },
       { name: 'Tenant - Buildings', description: 'Building CRUD operations' },
       { name: 'Tenant - Floors', description: 'Floor management within buildings' },
@@ -537,16 +799,18 @@ const options = {
         post: {
           tags: ['Platform - Tenants'],
           summary: 'Create a new tenant',
-          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['name', 'email', 'adminEmail', 'adminPassword', 'adminFirstName', 'adminLastName'], properties: { name: { type: 'string' }, email: { type: 'string' }, phone: { type: 'string' }, plan: { type: 'string', enum: ['STARTER', 'GROWTH', 'BUSINESS', 'ENTERPRISE'] }, adminEmail: { type: 'string' }, adminPassword: { type: 'string' }, adminFirstName: { type: 'string' }, adminLastName: { type: 'string' } } } } } },
-          responses: { 201: { description: 'Tenant created' } },
+          description: 'The tenant starts on a free trial (platform default days) at the platform default rate per bed. Send `features` (add-on codes) to choose exactly which add-on features the tenant gets; leave it out to use the platform default set. Core features are always on. Send `ratePerBed` and/or `trialDays` to override them for this tenant only; `trialDays: 0` skips the trial.',
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['name', 'email', 'adminEmail', 'adminPassword', 'adminFirstName', 'adminLastName'], properties: { name: { type: 'string' }, email: { type: 'string' }, phone: { type: 'string' }, ratePerBed: { type: 'number', description: 'Optional custom rate in rupees per bed per month' }, trialDays: { type: 'integer', description: 'Optional free-trial length in days (0 to 365)' }, adminEmail: { type: 'string' }, adminPassword: { type: 'string' }, adminFirstName: { type: 'string' }, adminLastName: { type: 'string' } } } } } },
+          responses: { 201: { description: 'Tenant created with its trial subscription' } },
         },
       },
       '/platform/tenants/{id}': {
         get: {
           tags: ['Platform - Tenants'],
           summary: 'Get tenant details',
+          description: 'Includes the subscription and a `billing` block: rate per bed, custom-rate flag, billable beds, estimated monthly amount and trial status.',
           parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
-          responses: { 200: { description: 'Tenant details' } },
+          responses: { 200: { description: 'Tenant details with billing summary' } },
         },
         put: {
           tags: ['Platform - Tenants'],
@@ -588,14 +852,6 @@ const options = {
       // ═══════════════════════════════════════════════════════════
       // SUBSCRIPTION & BILLING
       // ═══════════════════════════════════════════════════════════
-      '/subscription/plans': {
-        get: {
-          tags: ['Subscription'],
-          summary: 'Get all available plans (public)',
-          security: [],
-          responses: { 200: { description: 'List of plans with pricing' } },
-        },
-      },
       '/subscription/payment-config': {
         get: {
           tags: ['Subscription'],
@@ -607,7 +863,8 @@ const options = {
       '/subscription/admin/analytics': {
         get: {
           tags: ['Platform - Billing'],
-          summary: 'Subscription analytics (active, on-hold, revenue)',
+          summary: 'Subscription analytics (tenants by status, trials, beds, expected revenue)',
+          description: 'Includes trialTenants, payingTenants, totalBillableBeds, estimatedMonthlyRecurring (paying tenants, before tax) and trialPipeline (what trial tenants would pay).',
           responses: { 200: { description: 'Analytics object' } },
         },
       },
@@ -621,8 +878,9 @@ const options = {
         post: {
           tags: ['Platform - Billing'],
           summary: 'Generate a new invoice for a tenant',
+          description: 'Bills every bed that exists today (empty or occupied, in live buildings) at the tenant\'s current rate per bed, plus one line for each enabled add-on feature that has a price (per bed × beds, or flat), plus the current tax %. The lines are saved in `lineItems`. The bed count, rate and tax % are saved on the invoice and never recalculated. The billing period starts when the free trial or current paid period ends and lasts 30 days. Fails with 422 if the tenant has no beds or the total would be 0.',
           parameters: [{ name: 'tenantId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
-          responses: { 201: { description: 'Invoice generated' } },
+          responses: { 201: { description: 'Invoice generated (includes bedCount, ratePerBed, taxPercent, amount, tax, total)' }, 422: { description: 'No beds to bill, or total is 0' } },
         },
       },
       '/subscription/admin/invoices/{invoiceId}/confirm': {
@@ -662,8 +920,8 @@ const options = {
         get: {
           tags: ['Subscription'],
           summary: 'Get my subscription info (Tenant)',
-          description: 'Returns subscription status, days left, pending invoices, and payment config (QR/UPI)',
-          responses: { 200: { description: 'Subscription data with invoices' } },
+          description: 'Returns subscription status (with free-trial days left), `enabledFeatures` (core + add-ons the tenant can use), the tenant\'s rate per bed, billable bed count per building, the estimated next invoice, recent invoices and payment config (QR/UPI).',
+          responses: { 200: { description: 'Subscription, pricing and invoices' } },
         },
       },
       '/subscription/my/pay/{invoiceId}': {
@@ -854,6 +1112,8 @@ const options = {
       // ═══════════════════════════════════════════════════════════
       ...inventoryPaths,
       ...extraPaths,
+      ...billingPaths,
+      ...featurePaths,
 
       // ═══════════════════════════════════════════════════════════
       // TENANT - RENT & PAYMENTS
@@ -1243,18 +1503,18 @@ const options = {
       // TENANT - ROLES & PERMISSIONS
       // ═══════════════════════════════════════════════════════════
       '/tenant/roles': {
-        get: { tags: ['Tenant - Roles'], summary: 'List all roles with permissions', responses: { 200: { description: 'Roles with permission count' } } },
-        post: { tags: ['Tenant - Roles'], summary: 'Create a new role', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['name'], properties: { name: { type: 'string' }, description: { type: 'string' }, permissionIds: { type: 'array', items: { type: 'string' } } } } } } }, responses: { 201: { description: 'Role created' } } },
+        get: { tags: ['Tenant - Roles'], summary: 'List all roles with permissions', description: 'Requires the `roles:manage` permission. A role can only be accessed by the tenant that owns it (other tenants get 404).', responses: { 200: { description: 'Roles with permission count' } } },
+        post: { tags: ['Tenant - Roles'], summary: 'Create a new role', description: 'Requires the `roles:manage` permission. A role can only be accessed by the tenant that owns it (other tenants get 404). Platform permissions (tenants:*, platform:*) cannot be granted (403).', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['name'], properties: { name: { type: 'string' }, description: { type: 'string' }, permissionIds: { type: 'array', items: { type: 'string' } } } } } } }, responses: { 201: { description: 'Role created' } } },
       },
       '/tenant/roles/{id}': {
-        put: { tags: ['Tenant - Roles'], summary: 'Update role', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }], responses: { 200: { description: 'Role updated' } } },
-        delete: { tags: ['Tenant - Roles'], summary: 'Delete role', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }], responses: { 200: { description: 'Role deleted' } } },
+        put: { tags: ['Tenant - Roles'], summary: 'Update role name / description', description: 'Requires the `roles:manage` permission. A role can only be accessed by the tenant that owns it (other tenants get 404).', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { 200: { description: 'Role updated' }, 404: { description: 'Role not found (or owned by another tenant)' } } },
+        delete: { tags: ['Tenant - Roles'], summary: 'Delete role', description: 'Requires the `roles:manage` permission. A role can only be accessed by the tenant that owns it (other tenants get 404). System roles and roles still assigned to users or staff cannot be deleted (409).', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { 200: { description: 'Role deleted' }, 404: { description: 'Role not found (or owned by another tenant)' }, 409: { description: 'System role, or still assigned to users / staff' } } },
       },
       '/tenant/permissions': {
-        get: { tags: ['Tenant - Roles'], summary: 'List all available permissions', responses: { 200: { description: 'All system permissions grouped by module' } } },
+        get: { tags: ['Tenant - Roles'], summary: 'List all available permissions', description: 'Requires the `roles:manage` permission.', responses: { 200: { description: 'All system permissions grouped by module' } } },
       },
       '/tenant/roles/{id}/permissions': {
-        put: { tags: ['Tenant - Roles'], summary: 'Update permissions for a role', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['permissionIds'], properties: { permissionIds: { type: 'array', items: { type: 'string' } } } } } } }, responses: { 200: { description: 'Permissions updated' } } },
+        put: { tags: ['Tenant - Roles'], summary: 'Replace the permissions of a role', description: 'Requires the `roles:manage` permission. A role can only be accessed by the tenant that owns it (other tenants get 404). Send the complete list; platform permissions cannot be granted (403) and unknown ids are rejected (422). The change is atomic.', parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['permissionIds'], properties: { permissionIds: { type: 'array', items: { type: 'string' } } } } } } }, responses: { 200: { description: 'Permissions updated' } } },
       },
 
       // ═══════════════════════════════════════════════════════════

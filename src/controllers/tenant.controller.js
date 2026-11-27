@@ -3,7 +3,7 @@ import { successResponse, paginatedResponse } from '../utils/response.js';
 
 export const createTenant = async (req, res, next) => {
   try {
-    const tenant = await tenantService.create(req.body);
+    const tenant = await tenantService.create({ ...req.body, createdBy: req.user.id });
     successResponse(res, tenant, 'Tenant created successfully', 201);
   } catch (error) { next(error); }
 };
@@ -17,7 +17,7 @@ export const getTenants = async (req, res, next) => {
 
 export const getTenant = async (req, res, next) => {
   try {
-    const tenant = await tenantService.findById(req.params.id);
+    const tenant = await tenantService.findByIdWithBilling(req.params.id);
     successResponse(res, tenant);
   } catch (error) { next(error); }
 };

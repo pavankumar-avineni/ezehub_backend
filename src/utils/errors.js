@@ -38,6 +38,15 @@ export class ConflictError extends AppError {
   }
 }
 
+/** 403 returned when a tenant calls an API for a feature the platform has not enabled for them. */
+export class FeatureNotEnabledError extends AppError {
+  constructor(featureCode, featureName) {
+    super(`The "${featureName || featureCode}" feature is not enabled for your account. Contact support to add it.`, 403, [
+      { code: 'FEATURE_NOT_ENABLED', feature: featureCode },
+    ]);
+  }
+}
+
 export class SubscriptionLimitError extends AppError {
   constructor(message = 'Subscription limit reached') {
     super(message, 403);

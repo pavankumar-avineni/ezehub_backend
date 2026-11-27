@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ADDON_FEATURE_CODES, FEATURE_CODES } from '../constants/features.js';
 
 export const paginationSchema = z.object({
   query: z.object({
@@ -30,7 +31,6 @@ export const signupSchema = z.object({
     email: z.string().email('Invalid email address'),
     phone: z.string().regex(/^\d{10}$/, 'Phone must be exactly 10 digits'),
     password: z.string().min(8, 'Password must be at least 8 characters'),
-    plan: z.enum(['STARTER', 'GROWTH', 'BUSINESS', 'ENTERPRISE']).default('STARTER'),
   }),
 });
 
@@ -104,7 +104,11 @@ export const createTenantSchema = z.object({
     city: z.string().optional(),
     state: z.string().optional(),
     pincode: z.string().optional(),
-    plan: z.enum(['STARTER', 'GROWTH', 'BUSINESS', 'ENTERPRISE']).default('STARTER'),
+    // Optional per-tenant billing overrides. Leave out to use the platform defaults.
+    ratePerBed: z.number().min(0).max(100000).multipleOf(0.01).optional(),
+    trialDays: z.number().int().min(0).max(365).optional(),
+    // Add-on feature codes to switch on for this tenant. Leave out to use the platform default set.
+    features: z.array(z.enum(ADDON_FEATURE_CODES)).optional(),
     adminFirstName: z.string().min(1),
     adminLastName: z.string().min(1),
     adminEmail: z.string().email(),
@@ -571,15 +575,136 @@ export const createNotificationSchema = z.object({
   }),
 });
 
-export const updateSubscriptionSchema = z.object({
+// ─── Roles & permissions (tenant) ───────────────────────────────
+export const createRoleSchema = z.object({
+  body: z.object({
+    name: z.string().trim().min(2).max(100),
+    description: z.string().trim().max(300).optional(),
+    permissionIds: z.array(z.string().uuid()).max(200).optional(),
+  }),
+});
+
+export const updateRoleSchema = z.object({
+  params: z.object({ id: z.string().uuid() }),
+  body: z.object({
+    name: z.string().trim().min(2).max(100).optional(),
+    description: z.string().trim().max(300).optional(),
+  }).refine((b) => b.name !== undefined || b.description !== undefined, { message: 'Provide name or description' }),
+});
+
+export const updateRolePermissionsSchema = z.object({
+  params: z.object({ id: z.string().uuid() }),
+  body: z.object({
+    // The complete permission list for the role. Send [] to remove every permission.
+    permissionIds: z.array(z.string().uuid()).max(200),
+  }),
+});
+
+// ─── Per-bed billing (platform controls) ────────────────────────
+const rateField = z.number().min(0).max(100000).multipleOf(0.01);
+
+export const updateBillingSettingsSchema = z.object({
+  body: z.object({
+    defaultRatePerBed: rateField.optional(),
+    trialDays: z.number().int().min(0).max(365).optional(),
+    taxPercent: z.number().min(0).max(100).multipleOf(0.01).optional(),
+    // Add-on features given to new tenants when none are chosen (self sign-up and "create tenant" without `features`).
+    defaultFeatures: z.array(z.enum(ADDON_FEATURE_CODES)).optional(),
+    // Re-price tenants that are on the default rate (custom-rate tenants are never touched).
+    applyToExistingTenants: z.boolean().default(false),
+  }).refine(
+    (b) => b.defaultRatePerBed !== undefined || b.trialDays !== undefined || b.taxPercent !== undefined || b.defaultFeatures !== undefined,
+    { message: 'Provide at least one of defaultRatePerBed, trialDays, taxPercent, defaultFeatures' },
+  ).refine(
+    (b) => !b.applyToExistingTenants || b.defaultRatePerBed !== undefined,
+    { message: 'applyToExistingTenants only makes sense together with defaultRatePerBed', path: ['applyToExistingTenants'] },
+  ),
+});
+
+export const tenantIdParamSchema = z.object({
+  params: z.object({ tenantId: z.string().uuid() }),
+});
+
+export const setTenantRateSchema = z.object({
   params: z.object({ tenantId: z.string().uuid() }),
   body: z.object({
-    plan: z.enum(['STARTER', 'GROWTH', 'BUSINESS', 'ENTERPRISE']).optional(),
-    buildingLimit: z.number().int().optional(),
-    deviceLimit: z.number().int().optional(),
-    apiAccess: z.boolean().optional(),
-    whiteLabel: z.boolean().optional(),
-    prioritySupport: z.boolean().optional(),
+    ratePerBed: rateField.optional(),
+    // true = stop using a custom rate and follow the platform default again
+    useDefault: z.boolean().optional(),
+    reason: z.string().trim().max(300).optional(),
+  }).refine((b) => (b.ratePerBed !== undefined) !== (b.useDefault === true), {
+    message: 'Provide either ratePerBed, or useDefault: true',
+  }),
+});
+
+// ─── Feature catalog + per-tenant features (platform controls) ──
+const featurePrice = z.number().min(0).max(1000000).multipleOf(0.01);
+const featureCodeParam = z.enum(FEATURE_CODES);
+
+export const featureCodeParamSchema = z.object({
+  params: z.object({ code: featureCodeParam }),
+});
+
+export const updateCatalogFeatureSchema = z.object({
+  params: z.object({ code: featureCodeParam }),
+  body: z.object({
+    name: z.string().trim().min(2).max(100).optional(),
+    description: z.string().trim().max(500).optional(),
+    price: featurePrice.optional(),
+    // PER_BED = price x beds per month, FLAT = price per tenant per month
+    priceType: z.enum(['PER_BED', 'FLAT']).optional(),
+    // false = cannot be newly assigned (tenants that already have it keep it)
+    isActive: z.boolean().optional(),
+    reason: z.string().trim().max(300).optional(),
+  }).refine(
+    (b) => ['name', 'description', 'price', 'priceType', 'isActive'].some((k) => b[k] !== undefined),
+    { message: 'Provide at least one field to change' },
+  ),
+});
+
+export const setTenantFeaturesSchema = z.object({
+  params: z.object({ tenantId: z.string().uuid() }),
+  body: z.object({
+    // The complete list of add-ons the tenant should have. Core features are always on.
+    features: z.array(z.enum(ADDON_FEATURE_CODES)),
+    reason: z.string().trim().max(300).optional(),
+  }),
+});
+
+export const tenantFeatureActionSchema = z.object({
+  params: z.object({ tenantId: z.string().uuid(), code: z.enum(ADDON_FEATURE_CODES) }),
+  body: z.object({ reason: z.string().trim().max(300).optional() }).default({}),
+});
+
+export const setTenantFeaturePriceSchema = z.object({
+  params: z.object({ tenantId: z.string().uuid(), code: z.enum(ADDON_FEATURE_CODES) }),
+  body: z.object({
+    price: featurePrice.optional(),
+    // true = go back to the catalog price
+    useCatalogPrice: z.boolean().optional(),
+    reason: z.string().trim().max(300).optional(),
+  }).refine((b) => (b.price !== undefined) !== (b.useCatalogPrice === true), {
+    message: 'Provide either price, or useCatalogPrice: true',
+  }),
+});
+
+export const featureHistoryQuerySchema = z.object({
+  query: z.object({
+    page: z.string().optional(),
+    limit: z.string().optional(),
+    tenantId: z.string().uuid().optional(),
+    featureCode: featureCodeParam.optional(),
+    scope: z.enum(['catalog']).optional(),
+  }),
+});
+
+export const setTenantTrialSchema = z.object({
+  params: z.object({ tenantId: z.string().uuid() }),
+  body: z.object({
+    trialEndsAt: z.string().refine((v) => !Number.isNaN(Date.parse(v)), 'Invalid date').optional(),
+    extendDays: z.number().int().min(1).max(365).optional(),
+  }).refine((b) => (b.trialEndsAt !== undefined) !== (b.extendDays !== undefined), {
+    message: 'Provide either trialEndsAt or extendDays',
   }),
 });
 

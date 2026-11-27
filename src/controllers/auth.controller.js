@@ -1,15 +1,16 @@
 import authService from '../services/auth.service.js';
 import tenantService from '../services/tenant.service.js';
+import featureService from '../services/feature.service.js';
 import { successResponse } from '../utils/response.js';
 
 export const signup = async (req, res, next) => {
   try {
-    const { businessName, firstName, lastName, email, phone, password, plan } = req.body;
+    const { businessName, firstName, lastName, email, phone, password } = req.body;
+    // Public sign-up: platform defaults apply (default rate per bed + default free trial).
     await tenantService.create({
       name: businessName,
       email,
       phone,
-      plan: plan || 'STARTER',
       adminFirstName: firstName,
       adminLastName: lastName,
       adminEmail: email,
@@ -64,8 +65,12 @@ export const changePassword = async (req, res, next) => {
   } catch (error) { next(error); }
 };
 
-export const getProfile = async (req, res) => {
-  successResponse(res, req.user, 'Profile retrieved');
+export const getProfile = async (req, res, next) => {
+  try {
+    // Tenant users and residents also get the feature codes their tenant can use.
+    const enabledFeatures = req.user.tenantId ? await featureService.getEnabledCodes(req.user.tenantId) : undefined;
+    successResponse(res, { ...req.user, ...(enabledFeatures && { enabledFeatures }) }, 'Profile retrieved');
+  } catch (error) { next(error); }
 };
 
 // ─── RESIDENT AUTH ───────────────────────────────────────────

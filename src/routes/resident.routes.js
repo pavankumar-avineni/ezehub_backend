@@ -5,6 +5,7 @@ import { uploadToCloudinary } from '../config/cloudinary.js';
 import prisma from '../config/database.js';
 import { successResponse, paginatedResponse, generateReceiptNumber } from '../utils/response.js';
 import { validate } from '../middleware/validate.js';
+import { requireFeature } from '../middleware/feature.js';
 import {
   residentCreateComplaintSchema,
   residentCreateVisitorSchema,
@@ -22,6 +23,15 @@ router.use((req, res, next) => {
   }
   next();
 });
+
+// The whole resident app is an add-on, and several screens need their own feature too.
+router.use(requireFeature('RESIDENT_APP'));
+router.use('/complaints', requireFeature('COMPLAINTS'));
+router.use('/visitors', requireFeature('VISITORS'));
+router.use('/menu', requireFeature('FOOD_MENU'));
+router.use('/discounts', requireFeature('DISCOUNTS'));
+router.use('/promotions', requireFeature('PROMOTIONS'));
+router.use('/documents', requireFeature('DOCUMENTS'));
 
 // GET /resident/me - Get own profile with full details
 router.get('/me', async (req, res, next) => {

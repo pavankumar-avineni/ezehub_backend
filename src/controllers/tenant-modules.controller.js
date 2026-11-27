@@ -6,12 +6,12 @@ import rentService from '../services/rent.service.js';
 import { complaintService, visitorService } from '../services/complaint.service.js';
 import { financeService, maintenanceService } from '../services/finance.service.js';
 import { documentService, notificationService, reportService } from '../services/document.service.js';
-import tenantService from '../services/tenant.service.js';
 import discountService from '../services/discount.service.js';
 import promotionService from '../services/promotion.service.js';
 import foodMenuService from '../services/foodmenu.service.js';
 import prisma from '../config/database.js';
 import { hashPassword } from '../utils/password.js';
+import { NotFoundError, ValidationError, ForbiddenError, ConflictError } from '../utils/errors.js';
 import { successResponse, paginatedResponse, generateReceiptNumber } from '../utils/response.js';
 
 const wrap = (fn) => async (req, res, next) => {
@@ -20,7 +20,6 @@ const wrap = (fn) => async (req, res, next) => {
 
 // Buildings
 export const createBuilding = wrap(async (req, res) => {
-  await tenantService.checkBuildingLimit(req.tenantId);
   const building = await buildingService.create(req.tenantId, req.body);
   successResponse(res, building, 'Building created', 201);
 });
@@ -659,24 +658,52 @@ export const getRoles = wrap(async (req, res) => {
   successResponse(res, roles);
 });
 
+// A role may only be touched by the tenant that owns it. Anything else answers 404 so
+// the existence of other tenants' roles is not revealed.
+const findOwnRole = async (tenantId, roleId) => {
+  const role = await prisma.role.findFirst({
+    where: { id: roleId, tenantId, scope: 'TENANT', deletedAt: null },
+  });
+  if (!role) throw new NotFoundError('Role');
+  return role;
+};
+
+// Tenants can only grant tenant-level permissions, never platform ones.
+const assertGrantablePermissions = async (permissionIds) => {
+  const unique = [...new Set(permissionIds || [])];
+  if (!unique.length) return unique;
+  const found = await prisma.permission.findMany({ where: { id: { in: unique } }, select: { id: true, code: true } });
+  const foundIds = new Set(found.map((p) => p.id));
+  const missing = unique.filter((id) => !foundIds.has(id));
+  if (missing.length) throw new ValidationError('Unknown permission id(s)', missing.map((id) => ({ field: 'permissionIds', message: id })));
+  const forbidden = found.filter((p) => p.code.startsWith('tenants:') || p.code.startsWith('platform:'));
+  if (forbidden.length) throw new ForbiddenError(`Platform permissions cannot be granted to tenant roles: ${forbidden.map((p) => p.code).join(', ')}`);
+  return unique;
+};
+
 export const createRole = wrap(async (req, res) => {
-  const { name, description, permissionIds } = req.body;
+  const { name, description } = req.body;
+  const permissionIds = await assertGrantablePermissions(req.body.permissionIds);
   // Role.code is globally unique; derive it from the name and scope it to the
   // tenant so the same role name can exist across different tenants.
   const code = `${name.toLowerCase().replace(/\s+/g, '-')}-${req.tenantId}`;
-  const role = await prisma.role.create({
-    data: { name, code, description, scope: 'TENANT', tenantId: req.tenantId },
-  });
-  if (permissionIds?.length) {
-    await prisma.rolePermission.createMany({
-      data: permissionIds.map((pid) => ({ roleId: role.id, permissionId: pid })),
+  const role = await prisma.$transaction(async (tx) => {
+    const created = await tx.role.create({
+      data: { name, code, description, scope: 'TENANT', tenantId: req.tenantId },
     });
-  }
+    if (permissionIds.length) {
+      await tx.rolePermission.createMany({
+        data: permissionIds.map((pid) => ({ roleId: created.id, permissionId: pid })),
+      });
+    }
+    return created;
+  });
   successResponse(res, role, 'Role created', 201);
 });
 
 export const updateRole = wrap(async (req, res) => {
   const { name, description } = req.body;
+  await findOwnRole(req.tenantId, req.params.id);
   const role = await prisma.role.update({
     where: { id: req.params.id },
     data: { name, description },
@@ -685,7 +712,18 @@ export const updateRole = wrap(async (req, res) => {
 });
 
 export const deleteRole = wrap(async (req, res) => {
-  await prisma.role.update({ where: { id: req.params.id }, data: { deletedAt: new Date() } });
+  const role = await findOwnRole(req.tenantId, req.params.id);
+  if (role.isSystem) throw new ConflictError('System roles cannot be deleted');
+
+  const [users, staff] = await Promise.all([
+    prisma.tenantUser.count({ where: { roleId: role.id, tenantId: req.tenantId, deletedAt: null } }),
+    prisma.staff.count({ where: { roleId: role.id, tenantId: req.tenantId, deletedAt: null } }),
+  ]);
+  if (users + staff > 0) {
+    throw new ConflictError(`This role is still assigned to ${users} user(s) and ${staff} staff member(s). Reassign them first`);
+  }
+
+  await prisma.role.update({ where: { id: role.id }, data: { deletedAt: new Date() } });
   successResponse(res, null, 'Role deleted');
 });
 
@@ -695,16 +733,19 @@ export const getPermissions = wrap(async (req, res) => {
 });
 
 export const updateRolePermissions = wrap(async (req, res) => {
-  const { permissionIds } = req.body;
   const roleId = req.params.id;
+  await findOwnRole(req.tenantId, roleId);
+  const permissionIds = await assertGrantablePermissions(req.body.permissionIds);
 
-  // Delete existing and recreate
-  await prisma.rolePermission.deleteMany({ where: { roleId } });
-  if (permissionIds?.length) {
-    await prisma.rolePermission.createMany({
-      data: permissionIds.map((pid) => ({ roleId, permissionId: pid })),
-    });
-  }
+  // Replace the permission set atomically so a failure cannot leave the role with none.
+  await prisma.$transaction(async (tx) => {
+    await tx.rolePermission.deleteMany({ where: { roleId } });
+    if (permissionIds.length) {
+      await tx.rolePermission.createMany({
+        data: permissionIds.map((pid) => ({ roleId, permissionId: pid })),
+      });
+    }
+  });
 
   const role = await prisma.role.findUnique({
     where: { id: roleId },

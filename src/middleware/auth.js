@@ -3,10 +3,22 @@ import { UnauthorizedError } from '../utils/errors.js';
 import prisma from '../config/database.js';
 import { cacheGet, cacheSet } from '../utils/cache.js';
 
+/**
+ * `req.user.tenant` is returned by /auth/profile and cached in Redis, so it must never carry
+ * secrets. The tenant `settings` column holds payment details including the Razorpay key
+ * secret, so it is removed here. Code that needs settings reads them from the database.
+ */
+const sanitizeTenant = (tenant) => {
+  if (!tenant) return tenant;
+  const { settings: _settings, ...safe } = tenant;
+  return safe;
+};
+
 // Short TTL: fast enough to cut per-request DB load on hot paths, short
 // enough that a deactivated/suspended account is locked out within seconds.
 const USER_CACHE_TTL = 30;
-const userCacheKey = (scope, id) => `auth:user:${scope}:${id}`;
+// v2: entries from before tenant.settings was stripped may still be cached, so the key changed.
+const userCacheKey = (scope, id) => `auth:user:v2:${scope}:${id}`;
 
 export const authenticate = async (req, _res, next) => {
   try {
@@ -54,7 +66,7 @@ export const authenticate = async (req, _res, next) => {
         lastName: resident.lastName,
         scope: 'RESIDENT',
         tenantId: resident.tenantId,
-        tenant: resident.tenant,
+        tenant: sanitizeTenant(resident.tenant),
         bed: resident.bed,
         permissions: [],
       };
@@ -77,7 +89,7 @@ export const authenticate = async (req, _res, next) => {
         lastName: user.lastName,
         scope: 'TENANT',
         tenantId: user.tenantId,
-        tenant: user.tenant,
+        tenant: sanitizeTenant(user.tenant),
         role: user.role,
         permissions: user.role.permissions.map((rp) => rp.permission.code),
         isOnHold: user.tenant.status === 'ON_HOLD',
